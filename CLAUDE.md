@@ -5,6 +5,10 @@ OS webview) + a framework-free static frontend. Full architecture writeup
 is in `README.md` — read that first for the how/why. This file is the
 "don't break this" list plus a map of what lives where.
 
+**Desktop only** — Windows, Linux, macOS. No iOS/Android target, and none
+planned; `#[cfg_attr(mobile, ...)]` in `lib.rs`/`main.rs` is inert
+`create-tauri-app` scaffold, not an in-use code path.
+
 ## File map
 
 | File | Owns |
@@ -65,6 +69,27 @@ is in `README.md` — read that first for the how/why. This file is the
   feature, follow the same pattern (a boolean flag from Rust, a memoized
   loader promise in JS).
 
+- **Platform-gated `tauri`/`RunEvent` variants must be `#[cfg]`-gated in
+  our code too, matching the crate's own gate exactly — not just
+  "unused," a hard compile error on the excluded platforms.**
+  `RunEvent::Opened` (`lib.rs`'s macOS file-open handling) only exists
+  under `target_os = "macos"` in the `tauri` crate itself; matching on it
+  unconditionally compiled fine here (dev machine is macOS) and failed
+  Windows CI outright. This project builds and tests exclusively on
+  macOS, so this class of bug won't show up locally — before adding any
+  new platform-specific `tauri`/`tao` API usage, check its cfg gate in
+  the crate source, not just in the docs.
+
+- **`tauri_plugin_single_instance` is registered on Windows/Linux only**
+  (`#[cfg(not(target_os = "macos"))]` in `lib.rs`). On macOS it forwards
+  `argv` to an already-running instance — but a file opened via
+  Finder/"Open With" never appears in `argv` there, it arrives via
+  `RunEvent::Opened` directly on whichever process macOS's LaunchServices
+  routes to (including an already-running one, no second process spawned
+  at all). Registering the plugin on macOS meant a repeat "Open With"
+  connected to the running instance and forwarded an empty argv,
+  silently dropping the file — this was a real, shipped bug.
+
 ## Day to day
 
 ```bash
@@ -74,9 +99,12 @@ cd src-tauri && cargo test                # render.rs unit tests
 npm run tauri build                       # release bundles
 ```
 
-Kill any running dev/debug instance before rebuilding — the single-instance
-plugin means a stale process will just receive and swallow the new one's
-argv instead of exiting.
+Kill any running dev/debug instance before rebuilding. On Windows/Linux the
+single-instance plugin means a stale process will receive and swallow the
+new one's argv instead of exiting; on macOS (where that plugin isn't
+registered, see the invariant above) a stale process instead means a
+double-click just brings the OLD build to front via `RunEvent::Opened`
+instead of launching your new one.
 
 ## Known gaps
 

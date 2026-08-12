@@ -161,7 +161,14 @@ pub fn run() {
         .run(|app_handle, event| {
             // Entry path 2: cold start on macOS — the file path never
             // appears in argv, it arrives as RunEvent::Opened, which
-            // (like .setup()) always runs after the window is built.
+            // (like .setup()) always runs after the window is built. The
+            // variant itself only exists on macOS/iOS/Android
+            // (tauri-2.11.5/src/app.rs:257-263) — matching on it
+            // unconditionally is a compile error on Windows/Linux, not
+            // just a no-op, so this has to be cfg-gated. Desktop-only
+            // scope (Windows/Linux/macOS, no iOS/Android), so gate to
+            // exactly the one platform that's both in scope and needs it.
+            #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Opened { urls } = event {
                 let paths = urls.into_iter().filter_map(|url| {
                     (url.scheme() == "file").then(|| url.to_file_path().ok()).flatten()

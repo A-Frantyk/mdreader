@@ -105,7 +105,19 @@ pub fn render(source: &str, base_dir: &Path) -> (RenderedDoc, Vec<PathBuf>) {
                 };
                 transformed.push(Event::Html(CowStr::from(block_html)));
             }
-            Event::Start(Tag::Heading { level, id, .. }) => {
+            Event::Start(Tag::Heading { level, id, classes, attrs }) => {
+                // Buffer inner events only to compute a slug from the
+                // plain text when there's no explicit `{#id}` — the slug
+                // is needed on the *Start* event, which comes before the
+                // text that determines it. Everything buffered here still
+                // flows through the one shared `push_html` call below
+                // (never a separate one): a separate call was the exact
+                // bug this file's module doc warns about, just scoped to
+                // headings — it broke path resolution for images/links
+                // nested in a heading (resolve_event never ran on them)
+                // and footnote numbering for references nested in a
+                // heading (a second HtmlWriter means a second, wrong,
+                // footnote counter).
                 let mut inner: Vec<Event> = Vec::new();
                 let mut plain = String::new();
                 for inner_event in parser.by_ref() {
@@ -114,7 +126,7 @@ pub fn render(source: &str, base_dir: &Path) -> (RenderedDoc, Vec<PathBuf>) {
                         Event::Text(t) | Event::Code(t) => plain.push_str(t),
                         _ => {}
                     }
-                    inner.push(inner_event);
+                    inner.push(resolve_event(inner_event, base_dir, &mut assets));
                 }
                 let level_num = level as u8;
                 let slug = unique_id(
@@ -131,52 +143,30 @@ pub fn render(source: &str, base_dir: &Path) -> (RenderedDoc, Vec<PathBuf>) {
                     text: plain,
                 });
 
-                let mut inner_html = String::new();
-                pulldown_cmark::html::push_html(&mut inner_html, inner.into_iter());
                 let mut id_attr = String::new();
                 let _ = escape_into(&mut id_attr, &slug);
-                let heading_html = format!(
-                    "<h{level_num} id=\"{id_attr}\"><a class=\"anchor\" href=\"#{id_attr}\" aria-hidden=\"true\">#</a>{inner_html}</h{level_num}>\n"
-                );
-                transformed.push(Event::Html(CowStr::from(heading_html)));
-            }
-            Event::Start(Tag::Image {
-                link_type,
-                dest_url,
-                title,
-                id,
-            }) => {
-                let dest_url = match resolve_local(base_dir, &dest_url) {
-                    Some(path) => {
-                        let resolved = CowStr::from(path.to_string_lossy().into_owned());
-                        assets.push(path);
-                        resolved
-                    }
-                    None => dest_url,
-                };
-                transformed.push(Event::Start(Tag::Image {
-                    link_type,
-                    dest_url,
-                    title,
-                    id,
+                let anchor_html =
+                    format!("<a class=\"anchor\" href=\"#{id_attr}\" aria-hidden=\"true\">#</a>");
+
+                // `classes`/`attrs` (from `{.foo #bar key=val}` syntax,
+                // enabled by ENABLE_HEADING_ATTRIBUTES) pass through
+                // unmodified — pulldown-cmark's own writer renders them,
+                // only `id` needed overriding.
+                transformed.push(Event::Start(Tag::Heading {
+                    level,
+                    id: Some(CowStr::from(slug)),
+                    classes,
+                    attrs,
                 }));
+                transformed.push(Event::Html(CowStr::from(anchor_html)));
+                transformed.extend(inner);
+                transformed.push(Event::End(TagEnd::Heading(level)));
             }
-            Event::Start(Tag::Link {
-                link_type,
-                dest_url,
-                title,
-                id,
-            }) => {
-                let dest_url = match resolve_local(base_dir, &dest_url) {
-                    Some(path) => CowStr::from(path.to_string_lossy().into_owned()),
-                    None => dest_url,
-                };
-                transformed.push(Event::Start(Tag::Link {
-                    link_type,
-                    dest_url,
-                    title,
-                    id,
-                }));
+            Event::Start(Tag::Image { .. }) => {
+                transformed.push(resolve_event(event, base_dir, &mut assets));
+            }
+            Event::Start(Tag::Link { .. }) => {
+                transformed.push(resolve_event(event, base_dir, &mut assets));
             }
             Event::Text(t) if t.contains('$') => {
                 has_math = true;
@@ -200,6 +190,39 @@ pub fn render(source: &str, base_dir: &Path) -> (RenderedDoc, Vec<PathBuf>) {
         },
         assets,
     )
+}
+
+/// Rewrites an `Image`/`Link` start event's destination in place if it's a
+/// local relative path (see `resolve_local`), collecting the resolved
+/// path into `assets` for images so the caller can grant asset-protocol
+/// scope to exactly the files a document references. A no-op for every
+/// other event. Shared by the top-level match and the heading-inner-event
+/// loop so there's exactly one place this logic lives — headings buffer
+/// their content separately (to compute a slug before re-emitting the
+/// `Start` event) but must apply the identical resolution, or images and
+/// links nested in a heading silently keep their unresolved relative path.
+fn resolve_event<'a>(event: Event<'a>, base_dir: &Path, assets: &mut Vec<PathBuf>) -> Event<'a> {
+    match event {
+        Event::Start(Tag::Image { link_type, dest_url, title, id }) => {
+            let dest_url = match resolve_local(base_dir, &dest_url) {
+                Some(path) => {
+                    let resolved = CowStr::from(path.to_string_lossy().into_owned());
+                    assets.push(path);
+                    resolved
+                }
+                None => dest_url,
+            };
+            Event::Start(Tag::Image { link_type, dest_url, title, id })
+        }
+        Event::Start(Tag::Link { link_type, dest_url, title, id }) => {
+            let dest_url = match resolve_local(base_dir, &dest_url) {
+                Some(path) => CowStr::from(path.to_string_lossy().into_owned()),
+                None => dest_url,
+            };
+            Event::Start(Tag::Link { link_type, dest_url, title, id })
+        }
+        other => other,
+    }
 }
 
 /// Resolve `dest` to an absolute filesystem path if it's a same-machine
@@ -493,6 +516,46 @@ mod tests {
     fn percent_decodes_relative_paths() {
         let (_doc, assets) = render("![](my%20image.png)", Path::new("/tmp/mdreader-test"));
         assert_eq!(assets, vec![PathBuf::from("/tmp/mdreader-test/my image.png")]);
+    }
+
+    #[test]
+    fn resolves_images_and_links_inside_headings() {
+        let (doc, assets) = r_with_assets("## ![icon](icon.png) [text](other.md)");
+        assert!(doc.html.contains("src=\"/tmp/mdreader-test/icon.png\""));
+        assert!(doc.html.contains("href=\"/tmp/mdreader-test/other.md\""));
+        assert_eq!(assets, vec![PathBuf::from("/tmp/mdreader-test/icon.png")]);
+    }
+
+    #[test]
+    fn footnote_reference_inside_heading_numbers_correctly() {
+        let doc = r("First.[^a]\n\n## Section[^b]\n\n[^a]: one\n[^b]: two");
+        // [^a] appears first in document order, so it must be footnote 1
+        // and [^b] (inside the heading) must be 2 — not both "1", which
+        // is what a second, isolated HtmlWriter for the heading would
+        // produce (its own numbering starts fresh). Reference href is the
+        // raw label (`#a`/`#b`), not a synthesized id — confirmed against
+        // pulldown-cmark's html.rs FootnoteReference handling.
+        // `rel="noopener noreferrer"` is ammonia's own addition on every
+        // anchor (link_rel), present in the real rendered output.
+        assert!(doc.html.contains("footnote-definition-label\">1</sup>"));
+        assert!(doc.html.contains("footnote-definition-label\">2</sup>"));
+        assert!(doc.html.contains(
+            "<sup class=\"footnote-reference\"><a href=\"#a\" rel=\"noopener noreferrer\">1</a></sup>"
+        ));
+        assert!(doc.html.contains(
+            "<sup class=\"footnote-reference\"><a href=\"#b\" rel=\"noopener noreferrer\">2</a></sup>"
+        ));
+    }
+
+    #[test]
+    fn heading_classes_and_attrs_survive() {
+        let doc = r("## Title {.warning #custom-id}");
+        assert!(doc.html.contains("class=\"warning\""));
+        assert!(doc.html.contains("id=\"custom-id\""));
+    }
+
+    fn r_with_assets(source: &str) -> (RenderedDoc, Vec<PathBuf>) {
+        render(source, Path::new("/tmp/mdreader-test"))
     }
 
     #[test]

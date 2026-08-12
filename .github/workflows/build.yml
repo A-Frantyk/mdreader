@@ -1,10 +1,14 @@
 name: Build
 
-# CI build only — no GitHub Release is created. Produces the three
-# platform installers (macOS universal .app/.dmg, Windows NSIS .exe,
-# Linux .deb/.rpm) as downloadable workflow artifacts, driven by the
-# same bundle.fileAssociations config used everywhere else (see
-# src-tauri/tauri.conf.json and CLAUDE.md).
+# CI build only — no GitHub Release is created. Produces per-platform
+# installers as downloadable workflow artifacts — whichever formats
+# tauri.conf.json's bundle.targets:"all" yields on each OS (macOS: a
+# universal .dmg; Windows: NSIS .exe and MSI; Linux: .deb/.rpm, plus
+# AppImage if the runner has the tools for it) — driven by the same
+# bundle.fileAssociations config used everywhere else (see
+# src-tauri/tauri.conf.json and CLAUDE.md). Each artifact is staged flat
+# (see the "Stage installer(s)" step) so downloading and unzipping it
+# hands you the installer directly, not a folder tree to click through.
 on:
   push:
     branches: [main, master]
@@ -96,12 +100,36 @@ jobs:
       - name: Build
         run: npm run tauri build -- ${{ matrix.args }}
 
+      # actions/upload-artifact preserves directory structure starting at
+      # the first wildcard segment in `path` — globbing straight into
+      # target/ meant downloaded artifacts unzipped into
+      # release/bundle/<type>/ before you reached the actual installer.
+      # Stage every installer *file* Tauri produced (tauri.conf.json's
+      # targets:"all" means every format available on the OS, not just
+      # one — Windows gets NSIS+MSI, Linux gets deb/rpm/AppImage) into a
+      # flat directory first, so the artifact zip has no wrapper folders
+      # at all. bundle/macos/<App>.app is deliberately pruned: it's a
+      # directory tree (the raw .app bundle), not a double-clickable
+      # installer — the .dmg next to it is.
+      #
+      # Plain `find`, not a bash globstar loop: macos-latest's default
+      # `bash` in PATH is the OS-shipped 3.2 (Apple froze it there over
+      # GPLv3 licensing — confirmed locally, `bash --version`), and
+      # `globstar` needs bash 4+. `shell: bash` steps run with `-e` by
+      # default, so `shopt -s globstar` failing on an old bash would abort
+      # the whole step, not just no-op. `find`'s `-prune`/`-o`/`-exec` are
+      # POSIX and behave the same under GNU find (Linux, and Windows via
+      # Git Bash) and BSD find (macOS) — no shell-version dependency.
+      - name: Stage installer(s) for upload
+        shell: bash
+        run: |
+          mkdir -p dist
+          find src-tauri/target -path '*/bundle/macos' -prune -o -path '*/bundle/*' -type f -exec cp {} dist/ \;
+          ls -la dist
+
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
           name: mdreader-${{ matrix.name }}
-          # Matches both the flat `target/release/bundle` layout (Linux,
-          # Windows) and the per-target-triple layout `--target` produces
-          # (macOS universal build), so one glob covers all three legs.
-          path: src-tauri/target/**/release/bundle/**
+          path: dist/*
           if-no-files-found: error

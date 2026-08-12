@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>mdreader</title>
+    <!-- href swapped between code-theme-light.css / code-theme-dark.css by
+         app.js's setCodeThemeLink, per the resolved theme. -->
+    <link rel="stylesheet" href="code-theme-light.css" id="code-theme" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <div class="tabbar-row">
+        <div class="tabbar" id="tabbar" role="tablist" aria-label="Open documents"></div>
+        <div class="tabbar-controls">
+          <button id="open-file-btn" class="icon-btn" title="Open file…">+</button>
+          <button id="theme-btn" class="icon-btn" title="Theme: System"></button>
+        </div>
+      </div>
+
+      <div class="body">
+        <aside class="sidebar hidden" id="sidebar">
+          <div class="sidebar-title">Outline</div>
+          <nav class="toc" id="toc"></nav>
+        </aside>
+
+        <main class="content-wrap" id="content-wrap">
+          <div id="empty-state" class="empty-state">
+            <p>No document open.</p>
+            <button id="open-file-btn-main" class="open-btn">Open File…</button>
+            <p class="hint">or drop a Markdown file here, or open one from your file manager.</p>
+          </div>
+          <!-- Each open tab gets its own persistent <article class="content">,
+               appended here by app.js. Keeping every tab's rendered DOM alive
+               (rather than re-hydrating a shared node on every switch) is what
+               makes tab switching free and mermaid/KaTeX render exactly once. -->
+        </main>
+      </div>
+
+      <div class="findbar" id="findbar">
+        <input id="find-input" type="text" placeholder="Find in document" autocomplete="off" />
+        <span class="find-count" id="find-count"></span>
+        <button id="find-prev" title="Previous match (Shift+Enter)">&uarr;</button>
+        <button id="find-next" title="Next match (Enter)">&darr;</button>
+        <button id="find-close" title="Close (Esc)">&times;</button>
+      </div>
+
+      <div class="drop-overlay" id="drop-overlay">Drop to open</div>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>

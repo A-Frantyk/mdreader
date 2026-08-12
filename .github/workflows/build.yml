@@ -1,0 +1,72 @@
+name: Build
+
+# CI build only — no GitHub Release is created. Produces the three
+# platform installers (macOS universal .app/.dmg, Windows NSIS .exe,
+# Linux .deb/.rpm) as downloadable workflow artifacts, driven by the
+# same bundle.fileAssociations config used everywhere else (see
+# src-tauri/tauri.conf.json and CLAUDE.md).
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            name: macos
+            args: '--target universal-apple-darwin'
+          - platform: ubuntu-22.04
+            name: linux
+            args: ''
+          - platform: windows-latest
+            name: windows
+            args: ''
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux system dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          # Universal macOS builds need both Apple Silicon and Intel
+          # targets installed; Linux/Windows build for the host only.
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install frontend dependencies
+        run: npm install
+
+      - name: Build
+        run: npm run tauri build -- ${{ matrix.args }}
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: mdreader-${{ matrix.name }}
+          # Matches both the flat `target/release/bundle` layout (Linux,
+          # Windows) and the per-target-triple layout `--target` produces
+          # (macOS universal build), so one glob covers all three legs.
+          path: src-tauri/target/**/release/bundle/**
+          if-no-files-found: error

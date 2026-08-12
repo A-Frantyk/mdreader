@@ -14,11 +14,11 @@ planned; `#[cfg_attr(mobile, ...)]` in `lib.rs`/`main.rs` is inert
 | File | Owns |
 |---|---|
 | `src-tauri/src/render.rs` | Markdown → sanitized HTML. The core pipeline. Has its own module doc explaining the single-pass design — read it before touching this file. |
-| `src-tauri/src/lib.rs` | The three file-open entry paths, Tauri commands (`open_markdown_file`, `drain_pending_files`, `markdown_extensions`), plugin registration. `AppState`'s doc comment explains the queue-always pattern. |
+| `src-tauri/src/lib.rs` | The three file-open entry paths, Tauri commands (`open_markdown_file`, `drain_pending_files`, `markdown_extensions`, `read_markdown_source`, `render_markdown`, `save_markdown_file`), plugin registration. `AppState`'s doc comment explains the queue-always pattern. `render_and_grant` is the shared render+scope-grant tail used by both the file-open path and the live-preview path. |
 | `src-tauri/build.rs` | Generates `src/code-theme-light.css` and `src/code-theme-dark.css` from syntect's bundled themes at compile time. Re-run `cargo build` after touching this — the generated files are gitignored-adjacent build output, not hand-edited. |
 | `src-tauri/tauri.conf.json` | `bundle.fileAssociations` is the **single source of truth** for which extensions this app handles — it drives the OS-level file association *and* is read back at runtime (`lib.rs`'s `configured_extensions`) for argv/drop filtering and the `markdown_extensions` command. Don't hardcode the extension list anywhere else. |
-| `src/app.js` | All frontend logic: tabs, TOC, find, theme, drag-drop, lazy-loading. The only JS file — no other `.js` exists outside `src/vendor/`. |
-| `src/vendor/` | Mermaid + KaTeX, vendored (no CDN, no npm dependency at runtime). Don't add a bundler to manage these. |
+| `src/app.js` | All frontend logic: tabs, TOC, find, theme, drag-drop, lazy-loading, edit mode (split-pane source + live preview). The only JS file — no other `.js` exists outside `src/vendor/`. |
+| `src/vendor/` | Mermaid + KaTeX + CodeMirror 5, vendored (no CDN, no npm dependency at runtime). Don't add a bundler to manage these. |
 | `fixtures/demo.md` | Exercises every rendering feature (tables, task lists, code, mermaid, math, footnotes, raw HTML) — use it to sanity-check rendering changes. |
 
 ## Invariants — why these exist, don't casually change them
@@ -54,20 +54,51 @@ planned; `#[cfg_attr(mobile, ...)]` in `lib.rs`/`main.rs` is inert
   event. Don't "optimize" this by emitting the path directly — that was
   the original bug (double-clicking a `.md` file opened an empty window).
 
-- **Mermaid/KaTeX render exactly once, on first visibility, not on every
-  tab switch.** Each tab keeps its own persistent `<article>` element
-  (`app.js`'s `state.tabs[i].contentEl`); switching tabs toggles a CSS
-  class, it doesn't re-render. Both libraries measure text via the DOM, so
-  they must not run against a `display: none` element — `activateTab`
-  toggles visibility *before* triggering the first render. Don't move
-  Mermaid/KaTeX rendering back to "on every activation" or "at load time
-  regardless of visibility."
+- **Mermaid/KaTeX never run against a hidden element, and never redo work
+  that's already correct.** That's the intent behind "render exactly
+  once, on first visibility" — but it now has two call sites, not one.
+  For a plain view-only tab it's still literally once: each tab keeps its
+  own persistent `<article>` element (`app.js`'s `state.tabs[i].contentEl`);
+  switching tabs toggles a CSS class, it doesn't re-render, and
+  `activateTab`'s one-way `tab.rendered` flag is what makes "once" hold.
+  For a tab in split (edit) mode, the preview re-renders on every
+  debounced settle (`runPreview`, ~200ms after typing stops) — so
+  "exactly once" is impossible there, but the same two underlying rules
+  still apply: `renderMermaidFor`/`renderMathFor` are only called when the
+  tab's pane is visible (`runPreview` checks this and sets
+  `previewNeedsEnrich` to defer the pass rather than run it hidden), and
+  they only run on the settled debounce, never per keystroke. Don't move
+  either library's invocation back to "on every activation regardless of
+  visibility" (the old bug) or forward to "on every keystroke" (the new
+  one this guards against).
 
 - **Lazy-load gating.** `has_mermaid`/`has_math` come from `render.rs` and
   gate `ensureMermaid()`/`ensureKatex()` in `app.js` — a plain document
   must never fetch either bundle. If you add a new heavy client-side
   feature, follow the same pattern (a boolean flag from Rust, a memoized
   loader promise in JS).
+
+- **The write path is one narrow, validated command — not
+  `tauri-plugin-fs`.** `save_markdown_file` (`lib.rs`) is the app's only
+  filesystem write. It's a deliberately small custom command rather than
+  the fs plugin, which would need a broad ACL scope grant reachable by
+  any code running in the webview — this app renders untrusted markdown,
+  so keeping the write surface to one extension-validated path is a
+  meaningfully smaller attack surface. It validates the target extension
+  via `is_markdown_path` before writing, and writes atomically (temp file
+  in the *same* directory, then `rename` over the target — same-directory
+  matters because a cross-filesystem rename isn't atomic). Don't widen
+  this into a general-purpose write command, and don't add
+  `tauri-plugin-fs` alongside it.
+
+- **`scope.allow_file` grants are additive and never revoked, and live
+  preview calls `render_and_grant` on every debounced keystroke.**
+  `render()`'s asset list reflects whatever an image destination
+  *currently* is, including a half-typed path mid-edit
+  (`![](diagram.png)` grants scope for `d`, `di`, `dia`, … along the way
+  if ungated). `render_and_grant` filters to `Path::is_file()` before
+  granting for exactly this reason — don't remove that filter, and don't
+  add another `scope.allow_file` call site that skips it.
 
 - **Platform-gated `tauri`/`RunEvent` variants must be `#[cfg]`-gated in
   our code too, matching the crate's own gate exactly — not just
@@ -117,3 +148,26 @@ instead of launching your new one.
   first launch; Windows SmartScreen will warn. No code-signing pipeline
   exists yet.
 - No auto-update mechanism.
+- Edit mode covers editing and saving an *existing* file only. No "New
+  Document" / Save As / untitled-tab support yet (`tab.path` is always a
+  real path today), and no window-close guard — quitting the app with
+  unsaved edits in a background tab doesn't currently prompt (closing an
+  individual dirty *tab* does). No crash-safe autosave: a crash or force
+  quit loses unsaved edits, same as most editors without that feature.
+- The editor pane highlights markdown syntax only (`mode/markdown`,
+  `mode/gfm`); fenced code blocks show as plain monospace in the editor
+  (the live preview pane still syntax-highlights them via syntect,
+  identically to view mode). Per-fence-language CodeMirror modes are a
+  planned follow-up, not yet vendored.
+- No scroll sync between the editor and preview panes in split mode.
+- **Live-preview render cost has real headroom pressure on larger
+  documents.** `render.rs`'s `render_timing_on_realistic_documents` test
+  (ignored by default; run with `cargo test --release -- --ignored
+  --nocapture`) measured p50=82ms / p95=158ms on `fixtures/large.md`
+  (56KB, code-fence-heavy) — against the ~200ms debounce in `app.js`'s
+  `schedulePreview`. That leaves little room for IPC and `innerHTML`
+  reflow on top before a large document's preview starts feeling behind
+  while typing. Syntect's per-fence highlighting is the dominant cost
+  (every fence is re-highlighted on every render, not just the one being
+  edited) — a content-keyed fence-highlight cache is the natural next
+  step if this becomes noticeable in practice, but isn't implemented yet.

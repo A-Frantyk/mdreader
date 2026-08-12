@@ -13,24 +13,10 @@
   --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
 }
 
-/* System theme (default): follow the OS, unless the user has explicitly
-   overridden it — see the [data-theme] blocks below and app.js's
-   `applyTheme`. An explicit Light override (:not([data-theme="light"]))
-   suppresses this; an explicit Dark override is the second block, which
-   applies regardless of the OS setting. */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --bg: #1b1e23;
-    --bg-elevated: #22262c;
-    --border: #33383f;
-    --text: #e6e8eb;
-    --text-muted: #9298a3;
-    --accent: #6d93ea;
-    --accent-weak: #26314a;
-    --code-bg: #22262c;
-  }
-}
-
+/* Dark theme override. `data-theme` is always explicitly "light" or
+   "dark" (see app.js's `themePreference`/`applyTheme`) — there's no
+   OS-follow "system" mode, so this is the only theme-switching rule
+   needed alongside the light defaults in :root above. */
 :root[data-theme="dark"] {
   --bg: #1b1e23;
   --bg-elevated: #22262c;
@@ -104,6 +90,21 @@ html, body {
   color: var(--text);
 }
 
+.icon-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.icon-btn:disabled:hover {
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.icon-btn.active {
+  background: var(--accent-weak);
+  color: var(--accent);
+}
+
 .tab {
   display: flex;
   align-items: center;
@@ -129,6 +130,14 @@ html, body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.tab-dirty {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex: 0 0 auto;
 }
 
 .tab-close {
@@ -198,10 +207,89 @@ html, body {
 .toc a.level-5,
 .toc a.level-6 { padding-left: 52px; }
 
+/* This wraps the empty-state placeholder plus one .tab-pane per open
+   tab — see index.html's comment on #content-wrap. It does not itself
+   scroll: each tab's .preview-scroll (and, in split mode, .editor-pane)
+   is its own independent scroll container, because a split editor/
+   preview layout needs the two sides to scroll separately. That's a
+   deliberate change from the single shared scroller this used to be —
+   the TOC IntersectionObserver root and the tab-bar dirty logic both
+   depend on scrolling now happening per-tab, not on this element. */
 .content-wrap {
   flex: 1 1 auto;
+  position: relative;
+  overflow: hidden;
+}
+
+/* Per-tab pane: holds the editor (split mode only) and the preview side
+   by side. Persistent for the tab's lifetime, same rationale as the old
+   single .content element — recreating this per activation would break
+   the "mermaid/KaTeX render once" invariant this app relies on. */
+.tab-pane {
+  display: none;
+  height: 100%;
+}
+
+.tab-pane.visible {
+  display: flex;
+}
+
+/* Created lazily on first entry into split mode and left in the DOM
+   after that (never destroyed) so toggling back to view-only and back
+   to split again is free — same "create once, keep alive" approach as
+   the tab's own contentEl. Hidden via display:none rather than removed
+   whenever the tab isn't in split mode. */
+.editor-pane,
+.pane-splitter {
+  display: none;
+}
+
+.tab-pane.split .editor-pane {
+  display: block;
+  flex: 1 1 50%;
+  min-width: 0;
+  height: 100%;
+  overflow: hidden; /* CodeMirror manages its own internal scroller */
+  border-right: 1px solid var(--border);
+}
+
+.tab-pane.split .pane-splitter {
+  display: block;
+  flex: 0 0 6px;
+  cursor: col-resize;
+  background: var(--border);
+}
+
+.pane-splitter:hover,
+.pane-splitter.dragging {
+  background: var(--accent);
+}
+
+/* CodeMirror sizing: it needs an explicit height on its own wrapper, not
+   just the parent, or it collapses to a few lines. */
+.editor-pane .CodeMirror {
+  height: 100%;
+  font-family: var(--font-mono);
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+
+/* The scroll container for a tab's rendered preview — was .content-wrap
+   itself before the split-pane layout; see the comment above. */
+.preview-scroll {
+  flex: 1 1 50%;
+  min-width: 0;
+  height: 100%;
   overflow-y: auto;
   position: relative;
+}
+
+/* In split mode the preview no longer has the full window width to
+   itself, so the 780px reading column (set on .content below) would
+   leave a big empty margin in a half-width pane. */
+.tab-pane.split .content {
+  max-width: none;
+  padding: 32px 28px 96px;
 }
 
 .empty-state {
@@ -234,8 +322,11 @@ html, body {
 .open-btn:active { filter: brightness(0.95); }
 
 /* ---------- rendered markdown ---------- */
+/* No display:none/.visible toggle here — visibility is owned by the
+   ancestor .tab-pane's .visible class now (see the split-pane layout
+   above). This element itself is always block once its ancestors let it
+   show through. */
 .content {
-  display: none;
   max-width: 780px;
   margin: 0 auto;
   padding: 48px 32px 96px;
@@ -243,8 +334,6 @@ html, body {
   font-size: 16px;
   line-height: 1.65;
 }
-
-.content.visible { display: block; }
 
 .content h1, .content h2, .content h3,
 .content h4, .content h5, .content h6 {
@@ -400,6 +489,49 @@ html, body {
   color: var(--text-muted);
   min-width: 3.5em;
 }
+
+/* ---------- CodeMirror theme ----------
+   Bridged entirely to this file's own custom properties rather than
+   literal colors, so it follows the existing light/dark/system theme
+   blocks at the top of this file automatically — no separate dark
+   variant needed here, unlike the syntect-generated code-theme-*.css
+   files build.rs produces for the read-only preview. Markdown-token
+   coverage only (headers, emphasis, links, quotes) at this stage;
+   per-fence-language token colors are a later addition once language
+   modes beyond markdown/gfm are vendored. */
+.cm-s-mdreader.CodeMirror {
+  background: var(--bg);
+  color: var(--text);
+}
+
+.cm-s-mdreader .CodeMirror-gutters {
+  background: var(--bg);
+  border-right: 1px solid var(--border);
+}
+
+.cm-s-mdreader .CodeMirror-cursor {
+  border-left: 1px solid var(--text);
+}
+
+.cm-s-mdreader .CodeMirror-selected,
+.cm-s-mdreader .CodeMirror-line::selection,
+.cm-s-mdreader .CodeMirror-line > span::selection {
+  background: var(--accent-weak);
+}
+
+.cm-s-mdreader .CodeMirror-activeline-background {
+  background: var(--bg-elevated);
+}
+
+.cm-s-mdreader .cm-header { color: var(--accent); font-weight: 600; }
+.cm-s-mdreader .cm-strong { font-weight: 600; }
+.cm-s-mdreader .cm-em { font-style: italic; }
+.cm-s-mdreader .cm-link,
+.cm-s-mdreader .cm-url { color: var(--accent); }
+.cm-s-mdreader .cm-quote { color: var(--text-muted); font-style: italic; }
+.cm-s-mdreader .cm-comment { color: var(--text-muted); }
+.cm-s-mdreader .cm-variable-2,
+.cm-s-mdreader .cm-tag { color: var(--text); }
 
 /* ---------- drag & drop ---------- */
 .drop-overlay {

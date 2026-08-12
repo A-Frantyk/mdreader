@@ -44,22 +44,43 @@ fn is_markdown_path(state: &AppState, path: &std::path::Path) -> bool {
         .is_some_and(|e| state.markdown_extensions.contains(&e.to_ascii_lowercase()))
 }
 
+/// Render markdown source and grant the webview's asset-protocol scope
+/// access to exactly the local images it references. Shared by the
+/// file-open path and the live-preview path (`render_markdown`) — both
+/// need the same grant-on-render behavior, because `render()` returns a
+/// fresh asset list on every call and a re-render that introduces a new
+/// image reference must re-grant scope or the image silently fails to
+/// load. Grants are additive and never revoked for the app's lifetime.
+///
+/// Under live-preview re-rendering this function runs on every debounced
+/// keystroke, and `render()`'s asset list reflects whatever the image
+/// destination *currently* is — including a half-typed path mid-edit
+/// (`![](diagram.png)` grants scope for `d`, `di`, `dia`, … along the
+/// way). Filtering to paths that exist on disk before granting keeps that
+/// stream of transient, never-real paths out of the scope set; a grant
+/// for a path that doesn't exist yet is useless anyway, since there's
+/// nothing there for the asset protocol to serve.
+fn render_and_grant(app: &AppHandle, source: &str, base_dir: &std::path::Path) -> render::RenderedDoc {
+    let (doc, assets) = render::render(source, base_dir);
+
+    let scope = app.asset_protocol_scope();
+    for asset in assets.iter().filter(|a| a.is_file()) {
+        let _ = scope.allow_file(asset);
+    }
+
+    doc
+}
+
 /// Read + render a markdown file. Relative image/link destinations are
 /// resolved to absolute paths by the renderer itself (it's the only side
-/// that knows the document's directory); we just grant the webview's
-/// asset-protocol scope access to exactly the image files it found, so
-/// opening one document doesn't whitelist anything beyond what it embeds.
+/// that knows the document's directory); see `render_and_grant` for the
+/// scope-granting half of this.
 fn load_document(app: &AppHandle, path: &std::path::Path) -> Result<OpenedDocument, String> {
     let source = std::fs::read_to_string(path)
         .map_err(|e| format!("Couldn't read {}: {}", path.display(), e))?;
 
     let base_dir = path.parent().unwrap_or(std::path::Path::new("."));
-    let (doc, assets) = render::render(&source, base_dir);
-
-    let scope = app.asset_protocol_scope();
-    for asset in &assets {
-        let _ = scope.allow_file(asset);
-    }
+    let doc = render_and_grant(app, &source, base_dir);
 
     Ok(OpenedDocument {
         path: path.to_string_lossy().into_owned(),
@@ -108,6 +129,82 @@ fn open_markdown_file(app: AppHandle, path: String) -> Result<OpenedDocument, St
     load_document(&app, std::path::Path::new(&path))
 }
 
+/// Read a markdown file's raw source, for the editor. Kept separate from
+/// `open_markdown_file`'s payload — that command runs on every view-only
+/// open (the common case), and doubling its IPC payload with source text
+/// nobody reads in view mode would be wasteful. Fetched lazily, once, the
+/// first time a tab enters edit mode.
+#[tauri::command(async)]
+fn read_markdown_source(path: String) -> Result<String, String> {
+    std::fs::read_to_string(&path).map_err(|e| format!("Couldn't read {}: {}", path, e))
+}
+
+/// Re-render markdown source for the live preview pane. `base_path` is
+/// the document's own path, used the same way `load_document` uses a
+/// file's parent directory to resolve relative image/link destinations;
+/// `None` for an untitled document with no path yet, in which case the
+/// current working directory stands in until Save As gives it a real one.
+#[tauri::command(async)]
+fn render_markdown(
+    app: AppHandle,
+    source: String,
+    base_path: Option<String>,
+) -> Result<render::RenderedDoc, String> {
+    let base_dir = match &base_path {
+        Some(p) => std::path::Path::new(p)
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| std::path::PathBuf::from(".")),
+        None => std::env::current_dir().map_err(|e| e.to_string())?,
+    };
+    Ok(render_and_grant(&app, &source, &base_dir))
+}
+
+/// Write edited content back to disk. A narrow, single-purpose command
+/// rather than `tauri-plugin-fs` — that plugin would grant the webview
+/// broad, scope-configured filesystem access, and this app renders
+/// untrusted markdown, so a command that writes exactly one
+/// extension-validated path is a materially smaller attack surface than a
+/// general-purpose fs bridge.
+///
+/// Writes to a temp file in the *same directory* as the target, then
+/// renames over it: same-directory matters because a cross-filesystem
+/// rename isn't atomic, and `std::fs::rename` replaces an existing
+/// destination on both Windows and Unix, so one code path covers both
+/// platforms without a `#[cfg]` split.
+/// The atomic-write half of `save_markdown_file`, factored out so it's
+/// unit-testable without an `AppHandle`/`State` — it only needs a path
+/// that exists on a real filesystem.
+fn atomic_write(target: &std::path::Path, contents: &str) -> Result<(), String> {
+    let dir = target
+        .parent()
+        .ok_or_else(|| format!("No parent directory for {}", target.display()))?;
+    let file_name = target
+        .file_name()
+        .ok_or_else(|| format!("No file name for {}", target.display()))?;
+    let tmp_path = dir.join(format!(".{}.mdreader-tmp", file_name.to_string_lossy()));
+
+    std::fs::write(&tmp_path, contents)
+        .map_err(|e| format!("Couldn't write {}: {}", tmp_path.display(), e))?;
+    std::fs::rename(&tmp_path, target).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp_path);
+        format!("Couldn't save {}: {}", target.display(), e)
+    })
+}
+
+#[tauri::command(async)]
+fn save_markdown_file(
+    state: tauri::State<AppState>,
+    path: String,
+    contents: String,
+) -> Result<(), String> {
+    let path = std::path::Path::new(&path);
+    if !is_markdown_path(&state, path) {
+        return Err(format!("Refusing to save non-markdown path: {}", path.display()));
+    }
+    atomic_write(path, &contents)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let context = tauri::generate_context!();
@@ -154,7 +251,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             markdown_extensions,
             drain_pending_files,
-            open_markdown_file
+            open_markdown_file,
+            read_markdown_source,
+            render_markdown,
+            save_markdown_file
         ])
         .build(context)
         .expect("error while building tauri application")
@@ -176,4 +276,85 @@ pub fn run() {
                 queue_markdown_args(app_handle, paths);
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_state() -> AppState {
+        AppState {
+            pending: Mutex::new(Vec::new()),
+            markdown_extensions: ["md", "markdown", "mdown", "mkd"].iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    fn test_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("mdreader-libtest-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn is_markdown_path_accepts_configured_extensions_case_insensitively() {
+        let state = test_state();
+        assert!(is_markdown_path(&state, std::path::Path::new("a.md")));
+        assert!(is_markdown_path(&state, std::path::Path::new("a.MD")));
+        assert!(is_markdown_path(&state, std::path::Path::new("a.Markdown")));
+    }
+
+    #[test]
+    fn is_markdown_path_rejects_other_extensions() {
+        let state = test_state();
+        assert!(!is_markdown_path(&state, std::path::Path::new("a.txt")));
+        assert!(!is_markdown_path(&state, std::path::Path::new("a")));
+        assert!(!is_markdown_path(&state, std::path::Path::new(".zshrc")));
+    }
+
+    #[test]
+    fn atomic_write_creates_and_round_trips_contents() {
+        let dir = test_dir("roundtrip");
+        let target = dir.join("doc.md");
+        atomic_write(&target, "hello world").unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "hello world");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn atomic_write_overwrites_an_existing_file_with_no_stale_bytes() {
+        let dir = test_dir("overwrite");
+        let target = dir.join("doc.md");
+        std::fs::write(&target, "a very long original that must not leak into the result").unwrap();
+        atomic_write(&target, "short").unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "short");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn atomic_write_leaves_no_temp_file_behind_on_success() {
+        let dir = test_dir("notemp");
+        let target = dir.join("doc.md");
+        atomic_write(&target, "content").unwrap();
+        let leftover: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains("mdreader-tmp"))
+            .collect();
+        assert!(leftover.is_empty(), "leftover temp files: {leftover:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn atomic_write_to_a_nonexistent_directory_fails_without_touching_target() {
+        // Guards the failure path: no parent directory means atomic_write
+        // must return Err (from the initial std::fs::write to the temp
+        // path in that directory) rather than panicking or silently
+        // succeeding.
+        let target = std::env::temp_dir()
+            .join("mdreader-libtest-missing-dir-does-not-exist")
+            .join("doc.md");
+        assert!(atomic_write(&target, "x").is_err());
+        assert!(!target.exists());
+    }
 }

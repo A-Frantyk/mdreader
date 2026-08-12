@@ -14,8 +14,10 @@
       <div class="tabbar-row">
         <div class="tabbar" id="tabbar" role="tablist" aria-label="Open documents"></div>
         <div class="tabbar-controls">
+          <button id="edit-toggle-btn" class="icon-btn" title="Edit (Cmd/Ctrl+E)" disabled>&#9998;</button>
+          <button id="save-btn" class="icon-btn" title="Save (Cmd/Ctrl+S)" disabled>&#128190;</button>
           <button id="open-file-btn" class="icon-btn" title="Open file…">+</button>
-          <button id="theme-btn" class="icon-btn" title="Theme: System"></button>
+          <button id="theme-btn" class="icon-btn" title="Theme"></button>
         </div>
       </div>
 
@@ -31,10 +33,13 @@
             <button id="open-file-btn-main" class="open-btn">Open File…</button>
             <p class="hint">or drop a Markdown file here, or open one from your file manager.</p>
           </div>
-          <!-- Each open tab gets its own persistent <article class="content">,
-               appended here by app.js. Keeping every tab's rendered DOM alive
-               (rather than re-hydrating a shared node on every switch) is what
-               makes tab switching free and mermaid/KaTeX render exactly once. -->
+          <!-- Each open tab gets its own persistent div.tab-pane, appended
+               here by app.js: a .preview-scroll > article.content holding
+               the rendered document, plus (once the tab enters edit mode)
+               an .editor-pane hosting CodeMirror alongside it. Keeping
+               every tab's DOM alive (rather than re-hydrating a shared
+               node on every switch) is what makes tab switching free and
+               mermaid/KaTeX render exactly once per view. -->
         </main>
       </div>
 

@@ -40,7 +40,7 @@
         "ext": ["md", "markdown", "mdown", "mkd"],
         "name": "Markdown Document",
         "description": "Markdown Document",
-        "role": "Viewer",
+        "role": "Editor",
         "mimeType": "text/markdown",
         "exportedType": {
           "identifier": "com.mdreader.markdown",

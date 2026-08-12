@@ -25,11 +25,17 @@ const els = {
   openFileBtn: document.getElementById("open-file-btn"),
   openFileBtnMain: document.getElementById("open-file-btn-main"),
   themeBtn: document.getElementById("theme-btn"),
+  editToggleBtn: document.getElementById("edit-toggle-btn"),
+  saveBtn: document.getElementById("save-btn"),
   codeThemeLink: document.getElementById("code-theme"),
 };
 
 const state = {
-  tabs: [], // { path, title, headings, hasMermaid, hasMath, rendered, contentEl }
+  // { path, title, headings, hasMermaid, hasMath, rendered, paneEl,
+  //   previewEl, contentEl, mode, source, savedSource, dirty, editor,
+  //   editorEl, previewTimer }
+  // See loadTab (view-mode fields) and enterEditMode (edit-mode fields).
+  tabs: [],
   activeIndex: -1,
 };
 
@@ -54,22 +60,24 @@ function extOf(path) {
 }
 
 // ---------------------------------------------------------------------
-// Theme: System (default, follows the OS) / Light / Dark. System is
-// exactly the app's original behavior; Light/Dark are explicit overrides
-// stored in localStorage so they persist across launches. See the
+// Theme: Light / Dark only — a plain, persisted 2-state toggle. On first
+// launch (nothing in localStorage yet), the OS's current preference is
+// read once as a starting point and immediately persisted as an explicit
+// choice; from then on the app never re-consults the OS, so an OS theme
+// flip mid-session doesn't silently relabel anything. See the
 // [data-theme] blocks in styles.css and the two code-theme-*.css files
 // build.rs generates.
 // ---------------------------------------------------------------------
 const THEME_KEY = "mdreader.theme";
-const THEME_ICON = { system: "◐", light: "☀", dark: "☾" };
+const THEME_ICON = { light: "☀", dark: "☾" };
 
 function themePreference() {
-  return localStorage.getItem(THEME_KEY) || "system";
-}
-
-function resolvedTheme() {
-  const pref = themePreference();
-  return pref === "system" ? (darkQuery.matches ? "dark" : "light") : pref;
+  let pref = localStorage.getItem(THEME_KEY);
+  if (!pref) {
+    pref = darkQuery.matches ? "dark" : "light";
+    localStorage.setItem(THEME_KEY, pref); // one-time OS-based default, persisted immediately
+  }
+  return pref;
 }
 
 function setCodeThemeLink(theme) {
@@ -78,8 +86,8 @@ function setCodeThemeLink(theme) {
 
 async function applyTheme() {
   const pref = themePreference();
-  document.documentElement.dataset.theme = pref === "system" ? "" : pref;
-  setCodeThemeLink(resolvedTheme());
+  document.documentElement.dataset.theme = pref;
+  setCodeThemeLink(pref);
   els.themeBtn.textContent = THEME_ICON[pref];
   els.themeBtn.title = `Theme: ${pref[0].toUpperCase()}${pref.slice(1)}`;
   await refreshMermaidTheme();
@@ -92,8 +100,7 @@ async function refreshMermaidTheme() {
 }
 
 function cycleTheme() {
-  const order = ["system", "light", "dark"];
-  const next = order[(order.indexOf(themePreference()) + 1) % order.length];
+  const next = themePreference() === "dark" ? "light" : "dark";
   localStorage.setItem(THEME_KEY, next);
   applyTheme();
 }
@@ -115,13 +122,26 @@ async function openFileDialog() {
 // Opening documents
 // ---------------------------------------------------------------------
 
-/// Load `path` into a new tab. Its content element is created but not
-/// shown — `activateTab` toggles visibility and does the (lazy, one-time)
+/// Load `path` into a new tab. Its pane is created but not shown —
+/// `activateTab` toggles visibility and does the (lazy, one-time)
 /// mermaid/KaTeX render once the element actually has layout.
+///
+/// Structure: paneEl > previewEl(.preview-scroll) > contentEl(article).
+/// The editor side (editorEl) is created lazily, only when the tab first
+/// enters edit mode — see enterEditMode — so a pure viewing session never
+/// touches CodeMirror at all.
 async function loadTab(path) {
+  const paneEl = document.createElement("div");
+  paneEl.className = "tab-pane";
+
+  const previewEl = document.createElement("div");
+  previewEl.className = "preview-scroll";
+
   const contentEl = document.createElement("article");
   contentEl.className = "content";
-  els.contentWrap.appendChild(contentEl);
+  previewEl.appendChild(contentEl);
+  paneEl.appendChild(previewEl);
+  els.contentWrap.appendChild(paneEl);
 
   const tab = {
     path,
@@ -130,7 +150,26 @@ async function loadTab(path) {
     hasMermaid: false,
     hasMath: false,
     rendered: false,
+    paneEl,
+    previewEl,
     contentEl,
+    mode: "view",
+    source: null,
+    savedSource: null,
+    dirty: false,
+    editor: null,
+    editorEl: null,
+    previewTimer: null,
+    previewSeq: 0,
+    previewInFlight: false,
+    previewStale: false,
+    // Set when a debounced preview render's mermaid/KaTeX pass is
+    // skipped because the tab was backgrounded mid-edit (see
+    // runPreview) — activateTab checks this alongside `rendered` so a
+    // diagram doesn't come back stale raw-source when the tab is
+    // revisited.
+    previewNeedsEnrich: false,
+    closeConfirmPending: false,
   };
 
   try {
@@ -183,9 +222,41 @@ async function drainAndOpen() {
   if (pending.length) await openPaths(pending);
 }
 
-function closeTab(index) {
-  const [tab] = state.tabs.splice(index, 1);
-  tab?.contentEl.remove();
+/// Both existing call sites (the tab's × button, Cmd/Ctrl+W) fire this
+/// without awaiting it, which is fine — but this function itself now
+/// awaits a confirmation dialog when the tab is dirty, which the
+/// synchronous version never did. That await is why `index` gets
+/// re-resolved below before acting on it.
+async function closeTab(index) {
+  const tab = state.tabs[index];
+  if (!tab) return;
+
+  if (tab.dirty) {
+    if (tab.closeConfirmPending) return; // already asking about this tab
+    tab.closeConfirmPending = true;
+    let discard;
+    try {
+      discard = await tauri.dialog.confirm(`"${tab.title}" has unsaved changes. Discard them?`, {
+        title: "Unsaved changes",
+        kind: "warning",
+      });
+    } finally {
+      tab.closeConfirmPending = false;
+    }
+    if (!discard) return;
+
+    // While the dialog was open, renderTabBar's per-tab click handlers
+    // (which capture a tab's position by closure, not identity) could
+    // have closed a different tab, shifting every index after it — or
+    // the user could have triggered a second close of this same tab.
+    // Re-resolve by identity rather than trusting the stale `index`.
+    index = state.tabs.indexOf(tab);
+    if (index === -1) return; // already gone
+  }
+
+  const [closed] = state.tabs.splice(index, 1);
+  if (closed.previewTimer) clearTimeout(closed.previewTimer);
+  closed.paneEl.remove();
   // Math.min(index, len - 1) is -1 once the last tab closes, which
   // activateTab treats as "show the empty state" — no separate branch.
   activateTab(Math.min(index, state.tabs.length - 1));
@@ -206,6 +277,13 @@ function renderTabBar() {
     title.className = "tab-title";
     title.textContent = tab.title;
     el.appendChild(title);
+
+    if (tab.dirty) {
+      const dot = document.createElement("span");
+      dot.className = "tab-dirty";
+      dot.setAttribute("aria-label", "Unsaved changes");
+      el.appendChild(dot);
+    }
 
     const close = document.createElement("button");
     close.className = "tab-close";
@@ -228,10 +306,13 @@ async function activateTab(index) {
   state.activeIndex = index;
   renderTabBar();
   closeFind();
+  updateDocumentTitle();
 
   const tab = state.tabs[index];
   els.emptyState.style.display = tab ? "none" : "flex";
-  state.tabs.forEach((t, i) => t.contentEl.classList.toggle("visible", i === index));
+  state.tabs.forEach((t, i) => t.paneEl.classList.toggle("visible", i === index));
+  els.editToggleBtn.disabled = !tab;
+  els.saveBtn.disabled = !tab || !tab.dirty;
 
   if (!tab) {
     tocObserver?.disconnect();
@@ -242,16 +323,25 @@ async function activateTab(index) {
 
   updateToc(tab);
 
-  // First view of this tab: now that its content element is visible (and
-  // therefore has real layout), it's safe to run mermaid/KaTeX, which
-  // both need to measure text. Subsequent activations are free.
-  if (!tab.rendered) {
+  // First view of this tab, or a debounced live-preview render landed
+  // while it was backgrounded and skipped mermaid/KaTeX for the same
+  // reason (both need to measure text, which needs real layout — see
+  // runPreview): either way it's now safe and due.
+  if (!tab.rendered || tab.previewNeedsEnrich) {
     tab.rendered = true;
+    tab.previewNeedsEnrich = false;
     await Promise.all([
       tab.hasMermaid ? renderMermaidFor(tab) : null,
       tab.hasMath ? renderMathFor(tab.contentEl) : null,
     ]);
   }
+
+  // CodeMirror lays out against the DOM at creation time; if that
+  // happened while this pane was display:none (e.g. edit mode was
+  // entered on a background tab — not currently reachable, but cheap
+  // to guard), it renders blank until told to re-measure.
+  tab.editor?.refresh();
+  els.editToggleBtn.classList.toggle("active", tab.mode === "split");
 }
 
 function updateToc(tab) {
@@ -287,7 +377,10 @@ function updateToc(tab) {
         }
       });
     },
-    { root: els.contentWrap, rootMargin: "0px 0px -70% 0px", threshold: 0 }
+    // Root is this tab's own scroll container, not the shared
+    // #content-wrap — each tab scrolls independently now that a split
+    // pane can exist (see the .preview-scroll comment in styles.css).
+    { root: tab.previewEl, rootMargin: "0px 0px -70% 0px", threshold: 0 }
   );
   tab.headings.forEach((h) => {
     const heading = tab.contentEl.querySelector(`#${CSS.escape(h.id)}`);
@@ -374,11 +467,20 @@ function loadScript(src) {
 }
 
 function mermaidConfig() {
-  return { startOnLoad: false, securityLevel: "strict", theme: resolvedTheme() === "dark" ? "dark" : "default" };
+  return { startOnLoad: false, securityLevel: "strict", theme: themePreference() === "dark" ? "dark" : "default" };
 }
 
 function ensureMermaid() {
-  if (!mermaidLoadPromise) mermaidLoadPromise = loadScript("vendor/mermaid/mermaid.min.js");
+  if (!mermaidLoadPromise) {
+    // Null the memo out on failure so a transient error (e.g. the app
+    // briefly offline from a network drive) doesn't permanently wedge
+    // mermaid rendering for the rest of the session — the next call
+    // gets a fresh attempt instead of the same rejected promise forever.
+    mermaidLoadPromise = loadScript("vendor/mermaid/mermaid.min.js").catch((err) => {
+      mermaidLoadPromise = null;
+      throw err;
+    });
+  }
   return mermaidLoadPromise;
 }
 
@@ -413,9 +515,12 @@ function ensureKatex() {
     link.rel = "stylesheet";
     link.href = "vendor/katex/katex.min.css";
     document.head.appendChild(link);
-    katexLoadPromise = loadScript("vendor/katex/katex.min.js").then(() =>
-      loadScript("vendor/katex/auto-render.min.js")
-    );
+    katexLoadPromise = loadScript("vendor/katex/katex.min.js")
+      .then(() => loadScript("vendor/katex/auto-render.min.js"))
+      .catch((err) => {
+        katexLoadPromise = null; // see ensureMermaid — don't wedge on a transient failure
+        throw err;
+      });
   }
   return katexLoadPromise;
 }
@@ -437,14 +542,244 @@ async function renderMathFor(root) {
   }
 }
 
-// An OS theme flip only matters while the user hasn't overridden it —
-// applyTheme() re-resolves the effective theme, swaps the code-theme
-// stylesheet, and re-renders already-viewed tabs' diagrams (see
-// refreshMermaidTheme). Tabs never yet activated need nothing special —
-// they'll render fresh, and already theme-correct, on first activation.
-darkQuery.addEventListener("change", () => {
-  if (themePreference() === "system") applyTheme();
-});
+// ---------------------------------------------------------------------
+// Edit mode. A tab starts in read-only "view" mode (just the rendered
+// article, as before); Cmd/Ctrl+E — or the toolbar button — switches it
+// to "split" mode: a CodeMirror source pane alongside the same preview
+// article, kept in sync by a debounced re-render through the
+// `render_markdown` command. CodeMirror is vendored
+// (src/vendor/codemirror/) and loaded lazily via the same
+// memoized-promise pattern as Mermaid/KaTeX above, so a pure viewing
+// session never fetches it — see ensureCodeMirror.
+// ---------------------------------------------------------------------
+let codeMirrorLoadPromise = null;
+
+function ensureCodeMirror() {
+  if (!codeMirrorLoadPromise) {
+    const link = document.createElement("link");
+    link.rel = "stylesheet";
+    link.href = "vendor/codemirror/lib/codemirror.css";
+    document.head.appendChild(link);
+    codeMirrorLoadPromise = loadScript("vendor/codemirror/lib/codemirror.js")
+      .then(() => loadScript("vendor/codemirror/mode/markdown/markdown.js"))
+      .then(() => loadScript("vendor/codemirror/mode/gfm/gfm.js"))
+      // "gfm" is markdown with a small overlay mode layered on top —
+      // CodeMirror.overlayMode is not part of core codemirror.js, it's
+      // this addon. Without it, gfm.js's mode factory throws
+      // "CodeMirror.overlayMode is not a function" the moment a "gfm"
+      // editor is actually constructed (mode resolution happens lazily,
+      // at `new CodeMirror(...)` time, not when gfm.js itself loads) —
+      // which built the editor's empty DOM shell first, so the visible
+      // symptom was a blank editor pane, not an obvious load error.
+      .then(() => loadScript("vendor/codemirror/addon/mode/overlay.js"))
+      .catch((err) => {
+        codeMirrorLoadPromise = null; // see ensureMermaid — don't wedge on a transient failure
+        throw err;
+      });
+  }
+  return codeMirrorLoadPromise;
+}
+
+const PREVIEW_DEBOUNCE_MS = 200;
+
+/// Mark `tab` dirty/clean and, only when the value actually changes,
+/// reflect it in the tab bar and the save button — a full renderTabBar()
+/// rebuild on every keystroke (dirty is recomputed on every CodeMirror
+/// `change` event) would be wasteful once it's already showing the dot.
+function markDirty(tab, dirty) {
+  if (tab.dirty === dirty) return;
+  tab.dirty = dirty;
+  renderTabBar();
+  if (state.tabs[state.activeIndex] === tab) {
+    els.saveBtn.disabled = !dirty;
+    updateDocumentTitle();
+  }
+}
+
+/// document.title is otherwise never touched — Tauri doesn't sync it to
+/// the native window title bar on its own — so this is the one place
+/// that keeps it in sync with the active tab and its dirty state.
+function updateDocumentTitle() {
+  const tab = state.tabs[state.activeIndex];
+  document.title = tab ? `${tab.dirty ? "● " : ""}${tab.title} — mdreader` : "mdreader";
+}
+
+/// Writes the active editor buffer back to disk via the narrow
+/// `save_markdown_file` command (see its doc comment in lib.rs for why
+/// it's a dedicated command rather than tauri-plugin-fs). On failure the
+/// buffer, the dirty flag, and CodeMirror's undo history are all left
+/// untouched — a failed save must never look like a successful one.
+async function saveTab(tab) {
+  if (!tab || !tab.editor || !tab.dirty) return;
+  els.saveBtn.disabled = true;
+  try {
+    const contents = tab.editor.getValue();
+    await tauri.core.invoke("save_markdown_file", { path: tab.path, contents });
+    tab.savedSource = contents;
+    markDirty(tab, false);
+  } catch (err) {
+    console.error("save failed", err);
+    tauri.dialog
+      .message(`Couldn't save ${tab.title}:\n${err}`, { title: "Save failed", kind: "error" })
+      .catch((dialogErr) => console.error("failed to show save-error dialog", dialogErr));
+  } finally {
+    if (state.tabs[state.activeIndex] === tab) els.saveBtn.disabled = !tab.dirty;
+  }
+}
+
+/// Create (once) the CodeMirror instance and editor-pane/splitter DOM for
+/// `tab`, fetch its source lazily if this is the first time it's been
+/// edited, and switch the tab into split mode. Safe to call on a tab
+/// already in split mode.
+async function enterSplitMode(tab) {
+  if (tab.mode === "split") return;
+
+  await ensureCodeMirror();
+
+  if (tab.source === null) {
+    // Not part of open_markdown_file's payload — see read_markdown_source
+    // in lib.rs for why that's a separate, lazily-fetched call rather
+    // than doubling every view-only open's IPC payload with source text
+    // nobody reads in view mode.
+    tab.source = await tauri.core.invoke("read_markdown_source", { path: tab.path });
+    tab.savedSource = tab.source;
+  }
+
+  // Flip the pane into split mode *before* creating CodeMirror, not
+  // after: .editor-pane defaults to display:none and only becomes
+  // display:block once .tab-pane carries the "split" class (see
+  // styles.css). Constructing CodeMirror inside a still-hidden container
+  // makes it measure a zero-width/zero-height element and cache that —
+  // refresh() afterward doesn't reliably recover from it in practice.
+  // Doing this first means the editor's very first layout pass sees a
+  // real, visible container, with the trailing refresh() below kept only
+  // as a defensive re-measure for the "already exists, pane was hidden
+  // in between" path.
+  tab.mode = "split";
+  tab.paneEl.classList.add("split");
+
+  if (!tab.editorEl) {
+    const editorPane = document.createElement("div");
+    editorPane.className = "editor-pane";
+    const splitter = document.createElement("div");
+    splitter.className = "pane-splitter";
+    tab.paneEl.insertBefore(editorPane, tab.previewEl);
+    tab.paneEl.insertBefore(splitter, tab.previewEl);
+
+    // If construction throws (e.g. a missing mode dependency — see the
+    // overlay.js comment in ensureCodeMirror), don't leave the pane
+    // claiming to be in split mode with a half-built, empty editor: undo
+    // the DOM and the mode flip before rethrowing, so a failed edit-mode
+    // entry visibly fails (toggleEditMode's catch just console.errors —
+    // it doesn't know to check DOM state) rather than looking like it
+    // succeeded with nothing in it.
+    try {
+      tab.editor = new window.CodeMirror(editorPane, {
+        value: tab.source,
+        mode: "gfm",
+        theme: "mdreader",
+        lineWrapping: true,
+        lineNumbers: false,
+      });
+    } catch (err) {
+      editorPane.remove();
+      splitter.remove();
+      tab.mode = "view";
+      tab.paneEl.classList.remove("split");
+      throw err;
+    }
+    tab.editorEl = editorPane;
+
+    tab.editor.on("change", () => {
+      markDirty(tab, tab.editor.getValue() !== tab.savedSource);
+      schedulePreview(tab);
+    });
+  }
+
+  tab.editor.refresh();
+  if (state.tabs[state.activeIndex] === tab) els.editToggleBtn.classList.add("active");
+}
+
+function exitSplitMode(tab) {
+  if (tab.mode !== "split") return;
+  tab.mode = "view";
+  tab.paneEl.classList.remove("split");
+  if (state.tabs[state.activeIndex] === tab) els.editToggleBtn.classList.remove("active");
+}
+
+async function toggleEditMode() {
+  const tab = state.tabs[state.activeIndex];
+  if (!tab) return;
+  if (tab.mode === "split") {
+    exitSplitMode(tab);
+    return;
+  }
+  els.editToggleBtn.disabled = true;
+  try {
+    await enterSplitMode(tab);
+  } catch (err) {
+    console.error("failed to enter edit mode", err);
+  } finally {
+    els.editToggleBtn.disabled = false;
+  }
+}
+
+/// Debounced re-render of `tab`'s preview from its live editor buffer.
+function schedulePreview(tab) {
+  clearTimeout(tab.previewTimer);
+  tab.previewTimer = setTimeout(() => runPreview(tab), PREVIEW_DEBOUNCE_MS);
+}
+
+/// Re-renders `tab`'s preview from the editor's current value. At most
+/// one `render_markdown` call in flight per tab — a change that lands
+/// mid-render doesn't queue a second invoke, it sets `previewStale` and
+/// this re-fires itself once the in-flight one resolves. A `previewSeq`
+/// counter guards against applying a response that's been superseded by
+/// a newer one that happened to resolve first (async commands can
+/// complete out of order).
+async function runPreview(tab) {
+  if (tab.previewInFlight) {
+    tab.previewStale = true;
+    return;
+  }
+  tab.previewInFlight = true;
+  tab.previewStale = false;
+  const seq = ++tab.previewSeq;
+
+  try {
+    const source = tab.editor.getValue();
+    const doc = await tauri.core.invoke("render_markdown", { source, basePath: tab.path });
+    if (seq !== tab.previewSeq) return; // superseded by a later edit
+
+    tab.headings = doc.headings;
+    tab.hasMermaid = doc.has_mermaid;
+    tab.hasMath = doc.has_math;
+    tab.contentEl.innerHTML = doc.html;
+    rewriteImageSources(tab.contentEl);
+
+    const isActive = state.tabs[state.activeIndex] === tab;
+    if (isActive) updateToc(tab);
+
+    // Mermaid/KaTeX measure text via the DOM and must not run against a
+    // hidden subtree — the same rule the original "render exactly once,
+    // on first visibility" invariant exists for, just re-checked on
+    // every settle instead of once. If the tab isn't visible right now,
+    // skip and let activateTab's previewNeedsEnrich check catch it on
+    // the next activation instead of running against display:none.
+    if (isActive) {
+      if (tab.hasMermaid) await renderMermaidFor(tab);
+      if (tab.hasMath) await renderMathFor(tab.contentEl);
+      tab.previewNeedsEnrich = false;
+    } else {
+      tab.previewNeedsEnrich = tab.hasMermaid || tab.hasMath;
+    }
+  } catch (err) {
+    console.error("preview render failed", err);
+  } finally {
+    tab.previewInFlight = false;
+    if (tab.previewStale) schedulePreview(tab);
+  }
+}
 
 // ---------------------------------------------------------------------
 // In-page find (Ctrl/Cmd+F). The webview doesn't expose a scriptable
@@ -584,6 +919,7 @@ function wireStaticUI() {
   els.findClose.addEventListener("click", closeFind);
 
   document.addEventListener("keydown", (e) => {
+    if (e.isComposing) return; // IME composition — not a real shortcut keystroke
     const mod = e.metaKey || e.ctrlKey;
     if (mod && e.key.toLowerCase() === "f") {
       e.preventDefault();
@@ -591,8 +927,17 @@ function wireStaticUI() {
     } else if (mod && e.key.toLowerCase() === "w" && state.activeIndex !== -1) {
       e.preventDefault();
       closeTab(state.activeIndex);
+    } else if (mod && e.key.toLowerCase() === "e" && state.activeIndex !== -1) {
+      e.preventDefault();
+      toggleEditMode();
+    } else if (mod && e.key.toLowerCase() === "s" && state.activeIndex !== -1) {
+      e.preventDefault();
+      saveTab(state.tabs[state.activeIndex]);
     }
   });
+
+  els.editToggleBtn.addEventListener("click", toggleEditMode);
+  els.saveBtn.addEventListener("click", () => saveTab(state.tabs[state.activeIndex]));
 }
 
 async function wireDragDrop() {

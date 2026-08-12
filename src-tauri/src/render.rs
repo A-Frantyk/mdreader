@@ -570,4 +570,133 @@ mod tests {
         let doc = r("# T {#a\" onclick=\"x}");
         assert!(!doc.html.contains("onclick"));
     }
+
+    // ---------------------------------------------------------------
+    // Live-preview-specific coverage. `render_markdown` (lib.rs) calls
+    // `render()` on every debounced keystroke, which means it now runs
+    // against source states nobody would ever save: empty buffers,
+    // unclosed fences, half-typed tables. These tests exist because that
+    // usage pattern is new — `render()` itself is unchanged, but its
+    // input distribution is not.
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn empty_source_renders_an_empty_document() {
+        let doc = r("");
+        assert_eq!(doc.html, "");
+        assert!(doc.headings.is_empty());
+        assert_eq!(doc.title, None);
+        assert!(!doc.has_mermaid);
+        assert!(!doc.has_math);
+    }
+
+    #[test]
+    fn nonexistent_base_dir_does_not_panic() {
+        // The untitled-document case: `render_markdown` falls back to
+        // `std::env::current_dir()` when a tab has no path yet, but
+        // nothing guarantees that directory (or any base_dir) exists at
+        // the moment of a given render — render() must tolerate it.
+        let doc = render_at("# Hello\n\n![x](missing.png)", "/tmp/mdreader-test-does-not-exist");
+        assert!(doc.html.contains("Hello"));
+    }
+
+    #[test]
+    fn partial_markdown_states_do_not_panic() {
+        // Every one of these is a plausible mid-keystroke buffer state.
+        // The assertion is just "renders and sanitizes without
+        // panicking" — that's the entire risk profile live preview adds,
+        // since render() now runs on inputs nobody would ever save.
+        let partial_inputs = [
+            "|a|",
+            "| a | b |\n|---",
+            "```",
+            "```rus",
+            "```rust\nfn x() {",
+            "[link](",
+            "![](img",
+            "$$",
+            "$unterminated",
+            "- [",
+            "<div",
+            "[^",
+            "# {#",
+            "~~unterminated",
+            "**unterminated",
+        ];
+        for source in partial_inputs {
+            let doc = r(source);
+            // sanitize() must still have run — no raw <script>, no matter
+            // how malformed the input.
+            assert!(!doc.html.contains("<script"), "input {source:?} leaked into html unsanitized");
+        }
+    }
+
+    #[test]
+    fn unclosed_fence_still_produces_a_code_block() {
+        // Guards the "drain the parser until End(CodeBlock)" loop —
+        // an unclosed fence must not consume the rest of the document
+        // silently or panic.
+        let doc = r("```rust\nfn x() {}\n");
+        assert!(doc.html.contains("code-block"));
+    }
+
+    #[test]
+    fn asset_list_reflects_only_the_current_source_not_prior_calls() {
+        // render() is a pure function of its arguments — the asset list
+        // must not accumulate across calls. This is exactly what
+        // `render_and_grant`'s per-call scope-granting in lib.rs relies
+        // on: a re-render after removing an image reference should not
+        // still list that image.
+        let dir = std::env::temp_dir().join("mdreader-test-assets");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.png"), b"").unwrap();
+        std::fs::write(dir.join("b.png"), b"").unwrap();
+
+        let (_, assets_a) = render("![a](a.png)", &dir);
+        assert_eq!(assets_a.len(), 1);
+        assert!(assets_a[0].ends_with("a.png"));
+
+        let (_, assets_b) = render("![b](b.png)", &dir);
+        assert_eq!(assets_b.len(), 1);
+        assert!(assets_b[0].ends_with("b.png"));
+
+        let (_, assets_both) = render("![a](a.png) ![b](b.png)", &dir);
+        assert_eq!(assets_both.len(), 2);
+    }
+
+    #[test]
+    #[ignore] // run explicitly: `cargo test --release -- --ignored render_timing`
+    fn render_timing_on_realistic_documents() {
+        // No benchmark harness exists in this crate (no dev-dependencies
+        // at all) — this is a dependency-free stand-in, not a
+        // replacement for a real one. Run with `--release`; debug-profile
+        // timings from syntect/ammonia aren't representative. Exists to
+        // sanity-check the ~200ms live-preview debounce in app.js: if
+        // p95 here starts approaching that, the debounce (or a fence-
+        // highlight cache) needs revisiting.
+        let fixture = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../fixtures/large.md"),
+        )
+        .expect("fixtures/large.md must exist — see the render_timing test");
+        let base_dir = std::env::temp_dir();
+
+        let mut samples = Vec::new();
+        for _ in 0..20 {
+            let start = std::time::Instant::now();
+            let _ = render(&fixture, &base_dir);
+            samples.push(start.elapsed());
+        }
+        samples.sort();
+        let p50 = samples[samples.len() / 2];
+        let p95 = samples[samples.len() * 95 / 100];
+        eprintln!(
+            "render() on fixtures/large.md ({} bytes): p50={:?} p95={:?}",
+            fixture.len(),
+            p50,
+            p95
+        );
+        // Not a hard assertion — this is a visibility tool, not a gate.
+        // A real regression should be caught by a human reading the
+        // eprintln output, not by flaking CI on shared/slow runners.
+    }
 }

@@ -245,7 +245,12 @@ html, body {
 }
 
 .tab-pane.split .editor-pane {
-  display: block;
+  /* Flex column, not block: the formatting toolbar (.editor-toolbar) is
+     a fixed-height row above CodeMirror's own wrapper div — both are
+     children of .editor-pane, in that DOM order (see
+     createEditorToolbar's comment in app.js for why order matters). */
+  display: flex;
+  flex-direction: column;
   flex: 1 1 50%;
   min-width: 0;
   height: 100%;
@@ -265,10 +270,24 @@ html, body {
   background: var(--accent);
 }
 
-/* CodeMirror sizing: it needs an explicit height on its own wrapper, not
-   just the parent, or it collapses to a few lines. */
+.editor-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 6px;
+  flex: 0 0 auto;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+}
+
+/* CodeMirror sizing: a flex item alongside .editor-toolbar now, not the
+   sole content of .editor-pane — flex: 1 1 auto takes the remaining
+   space after the toolbar; min-height: 0 is what lets CodeMirror's own
+   internal scroller handle overflow instead of this item growing past
+   its container (same reason .body has it elsewhere in this file). */
 .editor-pane .CodeMirror {
-  height: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
   font-family: var(--font-mono);
   font-size: 13.5px;
   line-height: 1.55;
@@ -491,22 +510,46 @@ html, body {
 }
 
 /* ---------- CodeMirror theme ----------
-   Bridged entirely to this file's own custom properties rather than
-   literal colors, so it follows the existing light/dark/system theme
-   blocks at the top of this file automatically — no separate dark
-   variant needed here, unlike the syntect-generated code-theme-*.css
-   files build.rs produces for the read-only preview. Markdown-token
-   coverage only (headers, emphasis, links, quotes) at this stage;
-   per-fence-language token colors are a later addition once language
-   modes beyond markdown/gfm are vendored. */
+   Two theme layers, applied simultaneously (enterSplitMode's `theme:
+   "mdreader mdreader-syntax"` in app.js — CodeMirror supports multiple
+   space-separated theme names as distinct classes on the same wrapper),
+   with deliberately disjoint selectors so neither fights the other over
+   which rule wins:
+
+   - This block (`cm-s-mdreader`) owns editor *chrome* — background,
+     base text, gutters, cursor, selection — plus markdown-*structural*
+     tokens (headers, emphasis, links, quotes, list nesting), bridged to
+     this file's own custom properties so it follows the light/dark
+     blocks at the top of this file automatically, and reads as part of
+     this app rather than an embedded foreign editor. Background is
+     `--bg-elevated`, not `--bg`, so the editor pane is visibly distinct
+     from the preview pane next to it.
+   - `cm-s-mdreader-syntax` (generated — see build.rs's
+     generate_codemirror_theme_css) owns *code*-token colors (keyword,
+     string, number, comment-inside-a-fence, ...), derived from the same
+     syntect theme the read-only preview uses, so a document's fence
+     colors look the same whether you're viewing or editing it.
+
+   Three token classes are markdown.js's own reuse of CodeMirror's
+   limited shared vocabulary for non-code purposes, so they're owned
+   here, not by the generated theme, even though a "real" language mode
+   would also use them: `cm-comment` is markdown.js's class for inline
+   `` `code` `` spans (not just real comments), `cm-variable-2` is its
+   class for nested list markers, and `cm-tag` covers raw HTML embedded
+   in markdown prose. build.rs's generate_codemirror_theme_css
+   deliberately does not emit rules for these three. */
 .cm-s-mdreader.CodeMirror {
-  background: var(--bg);
+  background: var(--bg-elevated);
   color: var(--text);
 }
 
 .cm-s-mdreader .CodeMirror-gutters {
-  background: var(--bg);
+  background: var(--bg-elevated);
   border-right: 1px solid var(--border);
+}
+
+.cm-s-mdreader .CodeMirror-linenumber {
+  color: var(--text-muted);
 }
 
 .cm-s-mdreader .CodeMirror-cursor {
@@ -520,7 +563,7 @@ html, body {
 }
 
 .cm-s-mdreader .CodeMirror-activeline-background {
-  background: var(--bg-elevated);
+  background: var(--bg);
 }
 
 .cm-s-mdreader .cm-header { color: var(--accent); font-weight: 600; }
@@ -530,7 +573,7 @@ html, body {
 .cm-s-mdreader .cm-url { color: var(--accent); }
 .cm-s-mdreader .cm-quote { color: var(--text-muted); font-style: italic; }
 .cm-s-mdreader .cm-comment { color: var(--text-muted); }
-.cm-s-mdreader .cm-variable-2,
+.cm-s-mdreader .cm-variable-2 { color: var(--text); }
 .cm-s-mdreader .cm-tag { color: var(--text); }
 
 /* ---------- drag & drop ---------- */

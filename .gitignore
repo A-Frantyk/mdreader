@@ -28,3 +28,5 @@ dist-ssr
 # hand-edited. See CLAUDE.md's build.rs entry.
 /src/code-theme-light.css
 /src/code-theme-dark.css
+/src/codemirror-theme-light.css
+/src/codemirror-theme-dark.css

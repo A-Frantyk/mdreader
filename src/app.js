@@ -88,6 +88,12 @@ async function applyTheme() {
   const pref = themePreference();
   document.documentElement.dataset.theme = pref;
   setCodeThemeLink(pref);
+  // Only exists once edit mode has been entered at least once (see
+  // ensureCodeMirror) — a session that never opens the editor never
+  // creates this link, so there's nothing to flip.
+  if (cmSyntaxThemeLink) {
+    cmSyntaxThemeLink.href = pref === "dark" ? "codemirror-theme-dark.css" : "codemirror-theme-light.css";
+  }
   els.themeBtn.textContent = THEME_ICON[pref];
   els.themeBtn.title = `Theme: ${pref[0].toUpperCase()}${pref.slice(1)}`;
   await refreshMermaidTheme();
@@ -554,12 +560,32 @@ async function renderMathFor(root) {
 // ---------------------------------------------------------------------
 let codeMirrorLoadPromise = null;
 
+// The generated fence-highlighting theme (build.rs's
+// generate_codemirror_theme_css, class `cm-s-mdreader-syntax`) is a
+// separate stylesheet from the hand-written `cm-s-mdreader` one in
+// styles.css — CodeMirror supports multiple space-separated theme names
+// applied simultaneously (see enterSplitMode's `theme:` value), so the
+// two own disjoint sets of CSS selectors rather than fighting over one.
+// Created lazily inside ensureCodeMirror, not linked statically in
+// index.html like code-theme-*.css — a session that never enters edit
+// mode shouldn't fetch it. Kept as a module-level reference (like
+// els.codeThemeLink) so applyTheme can flip its href on a theme change
+// after edit mode has already been entered once.
+let cmSyntaxThemeLink = null;
+
 function ensureCodeMirror() {
   if (!codeMirrorLoadPromise) {
     const link = document.createElement("link");
     link.rel = "stylesheet";
     link.href = "vendor/codemirror/lib/codemirror.css";
     document.head.appendChild(link);
+
+    cmSyntaxThemeLink = document.createElement("link");
+    cmSyntaxThemeLink.rel = "stylesheet";
+    cmSyntaxThemeLink.href =
+      themePreference() === "dark" ? "codemirror-theme-dark.css" : "codemirror-theme-light.css";
+    document.head.appendChild(cmSyntaxThemeLink);
+
     codeMirrorLoadPromise = loadScript("vendor/codemirror/lib/codemirror.js")
       .then(() => loadScript("vendor/codemirror/mode/markdown/markdown.js"))
       .then(() => loadScript("vendor/codemirror/mode/gfm/gfm.js"))
@@ -572,6 +598,29 @@ function ensureCodeMirror() {
       // which built the editor's empty DOM shell first, so the visible
       // symptom was a blank editor pane, not an obvious load error.
       .then(() => loadScript("vendor/codemirror/addon/mode/overlay.js"))
+      // Fence-language highlighting: markdown.js's fencedCodeBlockHighlighting
+      // defaults to true already, but it resolves a fence's language via
+      // CodeMirror.findModeByName — defined by meta.js, not core — so
+      // without meta.js and the actual per-language modes, fences stay
+      // plain monospace no matter what the mode config says. Order below
+      // respects each file's own declared dependencies (checked directly
+      // against each file's UMD header, not assumed): rust.js needs
+      // addon/mode/simple.js loaded first; htmlmixed.js needs xml.js,
+      // javascript.js, and css.js loaded first — both satisfied by this
+      // sequence.
+      .then(() => loadScript("vendor/codemirror/mode/meta.js"))
+      .then(() => loadScript("vendor/codemirror/addon/mode/simple.js"))
+      .then(() => loadScript("vendor/codemirror/mode/javascript/javascript.js"))
+      .then(() => loadScript("vendor/codemirror/mode/python/python.js"))
+      .then(() => loadScript("vendor/codemirror/mode/shell/shell.js"))
+      .then(() => loadScript("vendor/codemirror/mode/yaml/yaml.js"))
+      .then(() => loadScript("vendor/codemirror/mode/xml/xml.js"))
+      .then(() => loadScript("vendor/codemirror/mode/css/css.js"))
+      .then(() => loadScript("vendor/codemirror/mode/clike/clike.js"))
+      .then(() => loadScript("vendor/codemirror/mode/go/go.js"))
+      .then(() => loadScript("vendor/codemirror/mode/sql/sql.js"))
+      .then(() => loadScript("vendor/codemirror/mode/rust/rust.js"))
+      .then(() => loadScript("vendor/codemirror/mode/htmlmixed/htmlmixed.js"))
       .catch((err) => {
         codeMirrorLoadPromise = null; // see ensureMermaid — don't wedge on a transient failure
         throw err;
@@ -631,6 +680,119 @@ async function saveTab(tab) {
 /// `tab`, fetch its source lazily if this is the first time it's been
 /// edited, and switch the tab into split mode. Safe to call on a tab
 /// already in split mode.
+/// Wrap (or, on a second call, unwrap) the editor's current selection in
+/// `marker` — the logic behind the Bold/Italic/Strikethrough toolbar
+/// buttons and their keyboard shortcuts. `marker` must be symmetric (same
+/// string on both sides, e.g. "**"/"*"/"~~") — every markdown inline
+/// style this app exposes is symmetric, so there's no need for a
+/// separate open/close-marker code path.
+///
+/// Toggle-aware like a word processor's Bold button: clicking it again on
+/// already-bold text un-bolds rather than double-wrapping. Two ways a
+/// selection can "already be bold" — the selection itself includes the
+/// markers (user dragged across "**bold**"), or the markers sit just
+/// outside the selection (user selected only "bold", markers untouched)
+/// — both are checked before falling through to wrap.
+/// Where a position ends up after `text` (which may itself contain
+/// newlines — a multi-line selection stays multi-line when re-inserted)
+/// is typed starting at `start`. Threading every reselection through this
+/// — rather than adding `text.length` to `start.ch` directly — is what
+/// keeps the post-wrap/unwrap selection correct for a selection spanning
+/// more than one line, not just the common single-line case.
+function posAfterText(start, text) {
+  const lines = text.split("\n");
+  if (lines.length === 1) return { line: start.line, ch: start.ch + text.length };
+  return { line: start.line + lines.length - 1, ch: lines[lines.length - 1].length };
+}
+
+function wrapSelection(cm, marker) {
+  const from = cm.getCursor("from");
+  const to = cm.getCursor("to");
+  const selected = cm.getRange(from, to);
+  const mlen = marker.length;
+
+  // Case 1: the selection itself already includes the markers.
+  if (selected.length >= mlen * 2 && selected.startsWith(marker) && selected.endsWith(marker)) {
+    const inner = selected.slice(mlen, selected.length - mlen);
+    cm.replaceRange(inner, from, to);
+    // replaceRange doesn't keep the new text selected on its own (it
+    // collapses to a cursor) — set it explicitly so this matches case
+    // 2's behavior below, and a second click toggles it back on again.
+    cm.setSelection(from, posAfterText(from, inner));
+    cm.focus();
+    return;
+  }
+
+  // Case 2: the markers sit just outside the selection. Peeking past the
+  // selection's own start/end is safe even near a line boundary —
+  // Math.max(0, ...) keeps the "before" probe in range, and CodeMirror's
+  // getRange clamps an out-of-bounds "after" ch to the line's actual
+  // length, so a short line just fails to match rather than throwing.
+  const before = cm.getRange({ line: from.line, ch: Math.max(0, from.ch - mlen) }, from);
+  const after = cm.getRange(to, { line: to.line, ch: to.ch + mlen });
+  if (before === marker && after === marker) {
+    const newFrom = { line: from.line, ch: from.ch - mlen };
+    const newTo = { line: to.line, ch: to.ch + mlen };
+    cm.replaceRange(selected, newFrom, newTo);
+    cm.setSelection(newFrom, posAfterText(newFrom, selected));
+    cm.focus();
+    return;
+  }
+
+  // Case 3: wrap. An empty selection (bare cursor) ends up with the
+  // cursor placed between the two markers, ready to type; a real
+  // selection is re-selected (not the markers) so a second click on the
+  // same text hits case 1 and toggles it back off. Each new position is
+  // computed from the previous one via posAfterText, not by adding
+  // lengths to `from`/`to` directly — correct even when `selected` spans
+  // multiple lines, where a flat `to.ch + mlen` would land on the wrong
+  // line entirely.
+  cm.replaceRange(marker + selected + marker, from, to);
+  const innerStart = posAfterText(from, marker);
+  if (selected.length === 0) {
+    cm.setCursor(innerStart);
+  } else {
+    cm.setSelection(innerStart, posAfterText(innerStart, selected));
+  }
+  cm.focus();
+}
+
+/// Bold/Italic/Strikethrough — the only inline styles exposed here,
+/// deliberately: real CommonMark/GFM syntax this renderer supports.
+/// Underline was asked about and dropped — Markdown has no native
+/// underline syntax, and the only way to get one (raw `<u>` HTML) isn't
+/// "MD syntax," which was the explicit constraint. See CLAUDE.md.
+const TOOLBAR_BUTTONS = [
+  { marker: "**", label: "B", title: "Bold (Cmd/Ctrl+B)", style: "font-weight:700" },
+  { marker: "*", label: "I", title: "Italic (Cmd/Ctrl+I)", style: "font-style:italic" },
+  { marker: "~~", label: "S", title: "Strikethrough (Cmd/Ctrl+Shift+X)", style: "text-decoration:line-through" },
+];
+
+/// Builds the formatting toolbar for `tab`'s editor pane. Must be called
+/// (and its result appended into editorPane) *before* `new CodeMirror(...)`
+/// — CodeMirror's constructor appends its own wrapper to whatever's
+/// already in the container rather than replacing it (verified against
+/// lib/codemirror.js's Display constructor), so toolbar-first in the DOM
+/// plus a flex-column .editor-pane is what puts it visually on top.
+/// No separate show/hide wiring needed: as a child of editorPane, it's
+/// already gated by the same `.tab-pane.split .editor-pane` display rule
+/// CodeMirror itself is.
+function createEditorToolbar(tab) {
+  const bar = document.createElement("div");
+  bar.className = "editor-toolbar";
+  TOOLBAR_BUTTONS.forEach(({ marker, label, title, style }) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "icon-btn";
+    btn.title = title;
+    btn.textContent = label;
+    btn.style.cssText = style;
+    btn.addEventListener("click", () => wrapSelection(tab.editor, marker));
+    bar.appendChild(btn);
+  });
+  return bar;
+}
+
 async function enterSplitMode(tab) {
   if (tab.mode === "split") return;
 
@@ -661,6 +823,10 @@ async function enterSplitMode(tab) {
   if (!tab.editorEl) {
     const editorPane = document.createElement("div");
     editorPane.className = "editor-pane";
+    // Toolbar first — see createEditorToolbar's comment on why DOM order
+    // here matters (CodeMirror appends, it doesn't replace).
+    const toolbar = createEditorToolbar(tab);
+    editorPane.appendChild(toolbar);
     const splitter = document.createElement("div");
     splitter.className = "pane-splitter";
     tab.paneEl.insertBefore(editorPane, tab.previewEl);
@@ -677,11 +843,30 @@ async function enterSplitMode(tab) {
       tab.editor = new window.CodeMirror(editorPane, {
         value: tab.source,
         mode: "gfm",
-        theme: "mdreader",
+        // Two theme names, space-separated — CodeMirror applies both
+        // simultaneously as separate cm-s-* classes (verified against
+        // lib/codemirror.js's theme option handler). "mdreader" (in
+        // styles.css) owns chrome: background, base text, gutters,
+        // cursor. "mdreader-syntax" (generated by build.rs from the same
+        // syntect theme the preview pane uses) owns only code-token
+        // colors. Disjoint selector sets, no precedence fights.
+        theme: "mdreader mdreader-syntax",
         lineWrapping: true,
-        lineNumbers: false,
+        lineNumbers: true,
+        // "Mod-" is CodeMirror's own cross-platform modifier alias
+        // (verified against lib/codemirror.js's keymap normalization —
+        // Cmd on macOS, Ctrl on Windows/Linux from one binding). These
+        // only fire while the editor itself has focus, unlike the app's
+        // global keydown handler, so they can't collide with Cmd/Ctrl+F
+        // or +W firing from the find input or elsewhere.
+        extraKeys: {
+          "Mod-B": (instance) => wrapSelection(instance, "**"),
+          "Mod-I": (instance) => wrapSelection(instance, "*"),
+          "Mod-Shift-X": (instance) => wrapSelection(instance, "~~"),
+        },
       });
     } catch (err) {
+      toolbar.remove();
       editorPane.remove();
       splitter.remove();
       tab.mode = "view";

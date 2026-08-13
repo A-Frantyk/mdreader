@@ -757,15 +757,211 @@ function wrapSelection(cm, marker) {
   cm.focus();
 }
 
-/// Bold/Italic/Strikethrough — the only inline styles exposed here,
-/// deliberately: real CommonMark/GFM syntax this renderer supports.
-/// Underline was asked about and dropped — Markdown has no native
-/// underline syntax, and the only way to get one (raw `<u>` HTML) isn't
-/// "MD syntax," which was the explicit constraint. See CLAUDE.md.
-const TOOLBAR_BUTTONS = [
-  { marker: "**", label: "B", title: "Bold (Cmd/Ctrl+B)", style: "font-weight:700" },
-  { marker: "*", label: "I", title: "Italic (Cmd/Ctrl+I)", style: "font-style:italic" },
-  { marker: "~~", label: "S", title: "Strikethrough (Cmd/Ctrl+Shift+X)", style: "text-decoration:line-through" },
+/// Toggles a per-line prefix (blockquote `>`, the three list types) across
+/// every line the selection touches — the "wrap" family only applies to a
+/// character span, this applies to whole lines. If every touched line
+/// already matches `testRe`, strips it from all of them; otherwise adds
+/// `makePrefix(n)` (1-based position within the selection, for numbered
+/// lists' sequential renumbering) to every line that doesn't already have
+/// it — a mixed-state selection resolves to "add," matching how most
+/// editors treat an inconsistent selection. Wrapped in `cm.operation` so a
+/// multi-line toggle is one undo step, not one per line (verified real API
+/// — lib/codemirror.js:8678).
+///
+/// `stripOtherListMarkers`: bullet/numbered/task are mutually exclusive as
+/// a line's list-marker type — clicking Numbered List on an existing
+/// bullet-list line must convert it (`1. text`), not stack
+/// (`1. - text`). Blockquote doesn't pass this — `> - item` is valid,
+/// a blockquote can legitimately contain a list.
+const LIST_PREFIX_RE = /^([-*+]\s+(\[[ xX]\]\s+)?|\d+[.)]\s+)/;
+
+function toggleLinePrefix(cm, testRe, makePrefix, { stripOtherListMarkers = false } = {}) {
+  const from = cm.getCursor("from");
+  const to = cm.getCursor("to");
+  let allHave = true;
+  for (let l = from.line; l <= to.line; l++) {
+    if (!testRe.test(cm.getLine(l))) { allHave = false; break; }
+  }
+  cm.operation(() => {
+    let n = 1;
+    for (let l = from.line; l <= to.line; l++) {
+      const text = cm.getLine(l);
+      if (allHave) {
+        cm.replaceRange(text.replace(testRe, ""), { line: l, ch: 0 }, { line: l, ch: text.length });
+      } else {
+        if (!testRe.test(text)) {
+          const base = stripOtherListMarkers ? text.replace(LIST_PREFIX_RE, "") : text;
+          cm.replaceRange(makePrefix(n) + base, { line: l, ch: 0 }, { line: l, ch: text.length });
+        }
+        n++;
+      }
+    }
+  });
+  cm.focus();
+}
+
+/// Cycles the current line through ATX heading levels: # -> ## -> ... ->
+/// ###### -> (none) -> # -> ... Operates on the selection's first line
+/// only — a heading is inherently single-line (CommonMark's ATX syntax is
+/// one #-prefixed line), so a multi-line selection heading-ifying every
+/// line isn't the expected behavior.
+function cycleHeading(cm) {
+  const line = cm.getCursor("from").line;
+  const text = cm.getLine(line);
+  const match = text.match(/^(#{1,6})\s+/);
+  const level = match ? match[1].length : 0;
+  const stripped = match ? text.slice(match[0].length) : text;
+  const nextLevel = level >= 6 ? 0 : level + 1;
+  const newText = nextLevel === 0 ? stripped : "#".repeat(nextLevel) + " " + stripped;
+  cm.replaceRange(newText, { line, ch: 0 }, { line, ch: text.length });
+  cm.setCursor({ line, ch: newText.length });
+  cm.focus();
+}
+
+/// Shared shape for Link/Image: build a template from the current
+/// selection (or a placeholder if there's none), insert it, then select
+/// the part of the template most likely to be edited next.
+/// `withSelection`/`withoutSelection` return `{ text, selStart, selEnd }`
+/// — offsets into `text` for the sub-range to select afterward.
+/// `posAfterText` (not flat `ch + length`) is what makes the resulting
+/// selection correct even though these templates are always single-line
+/// today — same helper `wrapSelection` already relies on.
+function insertTemplate(cm, { withSelection, withoutSelection }) {
+  const from = cm.getCursor("from");
+  const to = cm.getCursor("to");
+  const selected = cm.getRange(from, to);
+  const template = selected ? withSelection(selected) : withoutSelection();
+  cm.replaceRange(template.text, from, to);
+  cm.setSelection(
+    posAfterText(from, template.text.slice(0, template.selStart)),
+    posAfterText(from, template.text.slice(0, template.selEnd))
+  );
+  cm.focus();
+}
+
+function insertLink(cm) {
+  insertTemplate(cm, {
+    // Selection present -> it becomes the link text, next thing to fill
+    // in is the URL. No selection -> insert a full placeholder template,
+    // but select "text" first (you'd name the link before its target).
+    withSelection: (sel) => {
+      const text = `[${sel}](url)`;
+      return { text, selStart: text.length - 4, selEnd: text.length - 1 };
+    },
+    withoutSelection: () => ({ text: "[text](url)", selStart: 1, selEnd: 5 }),
+  });
+}
+
+function insertImage(cm) {
+  insertTemplate(cm, {
+    withSelection: (sel) => {
+      const text = `![${sel}](url)`;
+      return { text, selStart: text.length - 4, selEnd: text.length - 1 };
+    },
+    withoutSelection: () => ({ text: "![alt](url)", selStart: 2, selEnd: 5 }),
+  });
+}
+
+/// The blank lines around `---` are load-bearing, not cosmetic:
+/// CommonMark's setext-heading syntax turns a `---` line with no blank
+/// line before it into an H2 underline for the preceding paragraph
+/// instead of a thematic break. Without this padding, the button would
+/// silently retitle whatever paragraph the cursor happens to be in.
+function insertHorizontalRule(cm) {
+  const from = cm.getCursor("from");
+  const to = cm.getCursor("to");
+  cm.replaceRange("\n\n---\n\n", from, to);
+  cm.focus();
+}
+
+/// Same blank-line reasoning as insertHorizontalRule — an un-padded table
+/// can get absorbed as paragraph continuation text instead of parsed as a
+/// table. No guided tab-between-cells editing; that's a materially bigger
+/// feature. Cursor lands at the start of "Header 1" to type over it.
+function insertTable(cm) {
+  const from = cm.getCursor("from");
+  const to = cm.getCursor("to");
+  const prefix = "\n\n| ";
+  const table = `${prefix}Header 1 | Header 2 |\n| --- | --- |\n| Cell 1 | Cell 2 |\n\n`;
+  cm.replaceRange(table, from, to);
+  cm.setCursor(posAfterText(from, prefix));
+  cm.focus();
+}
+
+/// Inserts a footnote reference `[^n]` at the cursor and its matching
+/// definition `[^n]: ` appended at the document's end, as one atomic
+/// `cm.operation` — the only control here that touches two different
+/// positions in the document in a single click. `n` is chosen by scanning
+/// existing `[^n]:` *definition* lines (not references, which could
+/// legitimately reuse a number) and taking max + 1. Cursor ends up at the
+/// new definition, ready to type its text — matches how other markdown
+/// editors' footnote buttons behave. `lastLine()`/`getLine()` are read
+/// *after* the reference insert, inside the same operation, so they
+/// reflect the document's current state rather than a stale snapshot —
+/// correct even if the cursor was already on the document's last line.
+function insertFootnote(cm) {
+  const doc = cm.getValue();
+  const nums = [...doc.matchAll(/^\[\^(\d+)\]:/gm)].map((m) => parseInt(m[1], 10));
+  const n = nums.length ? Math.max(...nums) + 1 : 1;
+  cm.operation(() => {
+    const cursor = cm.getCursor("from");
+    cm.replaceRange(`[^${n}]`, cursor, cursor);
+    const lastLine = cm.lastLine();
+    const endOfDoc = { line: lastLine, ch: cm.getLine(lastLine).length };
+    cm.replaceRange(`\n\n[^${n}]: `, endOfDoc, endOfDoc);
+    const newLastLine = cm.lastLine();
+    cm.setCursor({ line: newLastLine, ch: cm.getLine(newLastLine).length });
+  });
+  cm.focus();
+}
+
+/// Three groups, rendered with a divider between them (see
+/// createEditorToolbar): inline styles, line-level block markers, and
+/// template insertions. Every control here is real syntax this app's own
+/// render.rs enables — nothing aspirational. Deliberately excluded:
+/// Underline (Markdown has no native syntax for it — see CLAUDE.md).
+/// Glyphs follow this app's existing icon convention (plain Unicode/short
+/// text, no icon font or SVG dependency, matching the ✎/💾/☀/☾ buttons
+/// elsewhere in the chrome).
+const TOOLBAR_GROUPS = [
+  [
+    { label: "B", title: "Bold (Cmd/Ctrl+B)", style: "font-weight:700", action: (cm) => wrapSelection(cm, "**") },
+    { label: "I", title: "Italic (Cmd/Ctrl+I)", style: "font-style:italic", action: (cm) => wrapSelection(cm, "*") },
+    {
+      label: "S",
+      title: "Strikethrough (Cmd/Ctrl+Shift+X)",
+      style: "text-decoration:line-through",
+      action: (cm) => wrapSelection(cm, "~~"),
+    },
+    { label: "</>", title: "Inline code", action: (cm) => wrapSelection(cm, "`") },
+  ],
+  [
+    { label: "H", title: "Heading (cycles H1–H6)", action: cycleHeading },
+    { label: "❝", title: "Blockquote", action: (cm) => toggleLinePrefix(cm, /^>\s?/, () => "> ") },
+    {
+      label: "•",
+      title: "Bullet list",
+      action: (cm) => toggleLinePrefix(cm, /^[-*+]\s+/, () => "- ", { stripOtherListMarkers: true }),
+    },
+    {
+      label: "1.",
+      title: "Numbered list",
+      action: (cm) => toggleLinePrefix(cm, /^\d+[.)]\s+/, (n) => `${n}. `, { stripOtherListMarkers: true }),
+    },
+    {
+      label: "☑",
+      title: "Task list",
+      action: (cm) =>
+        toggleLinePrefix(cm, /^[-*+]\s+\[[ xX]\]\s+/, () => "- [ ] ", { stripOtherListMarkers: true }),
+    },
+  ],
+  [
+    { label: "🔗", title: "Link", action: insertLink },
+    { label: "🖼", title: "Image", action: insertImage },
+    { label: "―", title: "Horizontal rule", action: insertHorizontalRule },
+    { label: "▦", title: "Table", action: insertTable },
+    { label: "[^]", title: "Footnote", action: insertFootnote },
+  ],
 ];
 
 /// Builds the formatting toolbar for `tab`'s editor pane. Must be called
@@ -780,15 +976,22 @@ const TOOLBAR_BUTTONS = [
 function createEditorToolbar(tab) {
   const bar = document.createElement("div");
   bar.className = "editor-toolbar";
-  TOOLBAR_BUTTONS.forEach(({ marker, label, title, style }) => {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "icon-btn";
-    btn.title = title;
-    btn.textContent = label;
-    btn.style.cssText = style;
-    btn.addEventListener("click", () => wrapSelection(tab.editor, marker));
-    bar.appendChild(btn);
+  TOOLBAR_GROUPS.forEach((group, i) => {
+    if (i > 0) {
+      const sep = document.createElement("div");
+      sep.className = "editor-toolbar-sep";
+      bar.appendChild(sep);
+    }
+    group.forEach(({ label, title, style, action }) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "icon-btn";
+      btn.title = title;
+      btn.textContent = label;
+      if (style) btn.style.cssText = style;
+      btn.addEventListener("click", () => action(tab.editor));
+      bar.appendChild(btn);
+    });
   });
   return bar;
 }

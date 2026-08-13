@@ -175,12 +175,19 @@ instead of launching your new one.
   individual dirty *tab* does). No crash-safe autosave: a crash or force
   quit loses unsaved edits, same as most editors without that feature.
 - No scroll sync between the editor and preview panes in split mode.
-- The editor's formatting toolbar (`app.js`'s `TOOLBAR_BUTTONS`) is
-  deliberately Bold/Italic/Strikethrough only, no Underline — Markdown has
-  no native underline syntax, and the only way to fake one (raw `<u>` HTML,
-  which this app's sanitizer does happen to allow through) isn't "MD
-  syntax." Don't add an underline button by reaching for `<u>`; if this
-  ever changes it needs a real decision, not a silent workaround.
+- The editor's formatting toolbar (`app.js`'s `TOOLBAR_GROUPS`) covers
+  Bold/Italic/Strikethrough/Inline-code, Heading/Blockquote/Bullet-list/
+  Numbered-list/Task-list, and Link/Image/Horizontal-rule/Table/Footnote —
+  every control is real syntax this app's own `render.rs` enables. No
+  Underline, deliberately — Markdown has no native underline syntax, and
+  the only way to fake one (raw `<u>` HTML, which this app's sanitizer does
+  happen to allow through) isn't "MD syntax." Don't add an underline button
+  by reaching for `<u>`; if this ever changes it needs a real decision, not
+  a silent workaround. Also deliberately not built: guided cell-to-cell
+  navigation after inserting a table (just a static skeleton, cursor lands
+  on the first header cell), and footnote-number reuse (numbering always
+  increments off the highest existing `[^n]:` definition, never recycles a
+  deleted one's number).
 - Fence-language resolution goes through `mode/meta.js`'s alias table,
   which is missing a couple of short forms this project's own fixtures
   don't hit but real documents might — notably no `"py"` alias for Python

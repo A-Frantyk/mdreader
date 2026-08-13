@@ -278,6 +278,22 @@ html, body {
   flex: 0 0 auto;
   background: var(--bg-elevated);
   border-bottom: 1px solid var(--border);
+  /* 13 buttons across 3 groups doesn't fit at this app's own configured
+     minWidth (tauri.conf.json) once the editor pane is halved by the
+     split — same problem the tab bar already solves for itself
+     (.tabbar, above), so reuse its answer rather than wrapping (which
+     would take unpredictable vertical space from the editor) or
+     shrinking buttons illegibly. */
+  overflow-x: auto;
+  flex-wrap: nowrap;
+}
+
+.editor-toolbar-sep {
+  width: 1px;
+  align-self: stretch;
+  background: var(--border);
+  margin: 0 4px;
+  flex: 0 0 auto;
 }
 
 /* CodeMirror sizing: a flex item alongside .editor-toolbar now, not the

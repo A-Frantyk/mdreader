@@ -14,7 +14,8 @@ planned; `#[cfg_attr(mobile, ...)]` in `lib.rs`/`main.rs` is inert
 | File | Owns |
 |---|---|
 | `src-tauri/src/render.rs` | Markdown → sanitized HTML. The core pipeline. Has its own module doc explaining the single-pass design — read it before touching this file. |
-| `src-tauri/src/lib.rs` | The three file-open entry paths, Tauri commands (`open_markdown_file`, `drain_pending_files`, `markdown_extensions`, `read_markdown_source`, `render_markdown`, `save_markdown_file`), plugin registration. `AppState`'s doc comment explains the queue-always pattern. `render_and_grant` is the shared render+scope-grant tail used by both the file-open path and the live-preview path. |
+| `src-tauri/src/lib.rs` | The three file-open entry paths, Tauri commands (`open_markdown_file`, `drain_pending_files`, `markdown_extensions`, `read_markdown_source`, `render_markdown`, `save_markdown_file`, `save_markdown_file_as`, `mark_frontend_ready`, `quit_app`), plugin registration, the `on_window_event` close handshake. `AppState`'s doc comment explains the queue-always pattern (and, for `frontend_ready`, the analogous close-handshake race). `render_and_grant` is the shared render+scope-grant tail used by both the file-open path and the live-preview path. |
+| `src-tauri/src/menu.rs` | The native File/Edit/View/Window/Help menu bar and its click handler. Hand-built rather than `tauri::menu::Menu::default()` — see the two menu invariants below for why. |
 | `src-tauri/build.rs` | Generates four CSS files from syntect's bundled themes at compile time: `src/code-theme-{light,dark}.css` (read-only preview) and `src/codemirror-theme-{light,dark}.css` (editor fence-token colors, via `Highlighter::style_for_stack` — see the two-theme-layer invariant below). Re-run `cargo build` after touching this — the generated files are gitignored-adjacent build output, not hand-edited. |
 | `src-tauri/tauri.conf.json` | `bundle.fileAssociations` is the **single source of truth** for which extensions this app handles — it drives the OS-level file association *and* is read back at runtime (`lib.rs`'s `configured_extensions`) for argv/drop filtering and the `markdown_extensions` command. Don't hardcode the extension list anywhere else. |
 | `src/app.js` | All frontend logic: tabs, TOC, find, theme, drag-drop, lazy-loading, edit mode (split-pane source + live preview). The only JS file — no other `.js` exists outside `src/vendor/`. |
@@ -131,6 +132,51 @@ planned; `#[cfg_attr(mobile, ...)]` in `lib.rs`/`main.rs` is inert
   new platform-specific `tauri`/`tao` API usage, check its cfg gate in
   the crate source, not just in the docs.
 
+- **The native menu is hand-built, and `PredefinedMenuItem::close_window`
+  is deliberately absent from every submenu.** `tauri::menu::Menu::default()`
+  can't be reused for two verified reasons: its File submenu is
+  `#[cfg(not(any(target_os = "linux", "dragonfly", "freebsd", "netbsd",
+  "openbsd")))]` — there is no File submenu on Linux at all — and its
+  File/Window submenus both carry `PredefinedMenuItem::close_window`,
+  which `muda` gives the Cmd+W accelerator on macOS. AppKit resolves menu
+  key equivalents before the webview ever sees the keystroke, so that item
+  would hijack this app's own Cmd+W ("close the active tab," wired in
+  `app.js`'s global keydown handler) and close the whole window instead.
+  `menu.rs` hand-builds every submenu instead, and omits `close_window`
+  everywhere. Don't add it back, and don't switch back to `Menu::default()`.
+
+- **Quit routes through a custom menu item (`menu.rs`'s `QUIT`), never
+  `PredefinedMenuItem::quit`.** Traced through the `tauri`/`muda`/`tao`
+  crate sources: `muda`'s macOS predefined Quit sends `terminate:` to
+  `NSApp`; `tao`'s `NSApplicationDelegate` implements only
+  `applicationWillTerminate`, never `applicationShouldTerminate`, so
+  there's no veto point; `tauri-runtime-wry` produces
+  `RunEvent::ExitRequested` from exactly two places (a window-destroyed
+  event, and `AppHandle::exit`/`restart`) — neither reachable from
+  `terminate:`. The predefined item would therefore terminate the process
+  with **no interceptable event at all**, silently bypassing the
+  unsaved-changes quit sequence. The corollary: `AppHandle::exit(0)` (via
+  `quit_app`) is the only sanctioned way this app ends itself — it's the
+  one path that produces an *unprevented* `ExitRequested` without
+  re-entering `WindowEvent::CloseRequested`, so the frontend's
+  already-confirmed quit sequence can't loop back into its own prompt.
+  `window.destroy()` was deliberately not used — it needs its own
+  capability grant, where `AppHandle::exit` needs none.
+
+- **`WindowEvent::CloseRequested` is prevented synchronously, and the
+  emit that hands off to JS is gated on `frontend_ready`.** The runtime
+  checks whether `CloseRequestApi::prevent_close()` was called immediately
+  after running listeners — any `await` first and the window closes
+  anyway, so `lib.rs`'s `on_window_event` handler can only prevent-and-emit
+  in one synchronous step, never await the frontend's answer. And emitting
+  `"close-requested"` before `app.js`'s listener for it exists would lose
+  the event outright (Tauri doesn't replay events) — the same race
+  `AppState`'s `pending`/`files-pending` queue already guards against, just
+  on the way out instead of the way in. `frontend_ready` (flipped by the
+  `mark_frontend_ready` command, called only after `init()` has registered
+  both the `close-requested` and `menu-action` listeners) is what makes the
+  window still closable if the frontend never finishes loading.
+
 - **`tauri_plugin_single_instance` is registered on Windows/Linux only**
   (`#[cfg(not(target_os = "macos"))]` in `lib.rs`). On macOS it forwards
   `argv` to an already-running instance — but a file opened via
@@ -168,12 +214,33 @@ instead of launching your new one.
   first launch; Windows SmartScreen will warn. No code-signing pipeline
   exists yet.
 - No auto-update mechanism.
-- Edit mode covers editing and saving an *existing* file only. No "New
-  Document" / Save As / untitled-tab support yet (`tab.path` is always a
-  real path today), and no window-close guard — quitting the app with
-  unsaved edits in a background tab doesn't currently prompt (closing an
-  individual dirty *tab* does). No crash-safe autosave: a crash or force
-  quit loses unsaved edits, same as most editors without that feature.
+- "New Document" (`newDocument` in `app.js`) creates an untitled,
+  never-saved tab (`tab.path === null` until a successful save); its first
+  Cmd/Ctrl+S goes through `saveTabAs`/`save_markdown_file_as` instead of
+  `save_markdown_file`. There is deliberately **no "Save As…"** for a file
+  that's already been saved once — Save always overwrites its existing
+  path silently, same as before this feature. Saving an untitled tab onto
+  a path that's already open in another tab is refused with a message
+  dialog rather than merging or shadowing the two tabs.
+- Both tab-close and app-quit now guard on unsaved changes (the shared
+  three-button modal driven by `confirmClosable`/`confirmUnsaved` in
+  `app.js`), and quitting with several dirty tabs prompts once per tab,
+  switching to each one first. This only covers the paths that go through
+  `WindowEvent::CloseRequested` or the quit menu item — macOS Dock icon →
+  Quit, Log Out/Restart, and a force-quit all send `terminate:` directly
+  (see the quit-menu-item invariant above) and cannot be intercepted;
+  unsaved changes are lost on those specific paths, same as before this
+  feature. Still no crash-safe autosave.
+- On Linux, `muda` silently drops menu items it doesn't support on GTK —
+  confirmed for `Undo`, `Redo`, `Minimize`, `Quit`, `Fullscreen` — so the
+  Edit menu there shows only Cut/Copy/Paste/Select All, and there is no
+  Window menu at all (`menu.rs` gates it to macOS for exactly this
+  reason). Those surviving GTK clipboard items are also libxdo-simulated
+  keystrokes, compiled out unless tauri's `linux-libxdo` feature is
+  enabled — deliberately left off (an X11-only C dependency, one this
+  project otherwise avoids — see `Cargo.toml`'s `regex-fancy` comment).
+  The keyboard shortcuts work regardless, since muda registers no GTK
+  accelerator for these items to steal.
 - No scroll sync between the editor and preview panes in split mode.
 - The editor's formatting toolbar (`app.js`'s `TOOLBAR_GROUPS`) covers
   Bold/Italic/Strikethrough/Inline-code, Heading/Blockquote/Bullet-list/

@@ -22,19 +22,30 @@ const els = {
   findNext: document.getElementById("find-next"),
   findClose: document.getElementById("find-close"),
   dropOverlay: document.getElementById("drop-overlay"),
-  openFileBtn: document.getElementById("open-file-btn"),
   openFileBtnMain: document.getElementById("open-file-btn-main"),
   themeBtn: document.getElementById("theme-btn"),
   editToggleBtn: document.getElementById("edit-toggle-btn"),
   saveBtn: document.getElementById("save-btn"),
+  newTabBtn: document.getElementById("new-tab-btn"),
+  newBtnMain: document.getElementById("new-btn-main"),
+  welcomeTemplate: document.getElementById("welcome-pane-template"),
   codeThemeLink: document.getElementById("code-theme"),
+  modalBackdrop: document.getElementById("modal-backdrop"),
+  modalMessage: document.getElementById("modal-message"),
+  modalSave: document.getElementById("modal-save"),
+  modalDontSave: document.getElementById("modal-dont-save"),
+  modalCancel: document.getElementById("modal-cancel"),
 };
 
 const state = {
-  // { path, title, headings, hasMermaid, hasMath, rendered, paneEl,
+  // { kind, path, title, headings, hasMermaid, hasMath, rendered, paneEl,
   //   previewEl, contentEl, mode, source, savedSource, dirty, editor,
-  //   editorEl, previewTimer }
-  // See loadTab (view-mode fields) and enterEditMode (edit-mode fields).
+  //   editorEl, previewTimer, saving }
+  // See createTabShell (the shared shape) and enterSplitMode (edit-mode
+  // fields). `path` is null for a brand-new, never-saved document — see
+  // newDocument. `kind` is "document" for every ordinary tab, or
+  // "welcome" for a browser-style "New Tab" page — see newWelcomeTab and
+  // buildWelcomePane.
   tabs: [],
   activeIndex: -1,
 };
@@ -128,15 +139,20 @@ async function openFileDialog() {
 // Opening documents
 // ---------------------------------------------------------------------
 
-/// Load `path` into a new tab. Its pane is created but not shown —
-/// `activateTab` toggles visibility and does the (lazy, one-time)
-/// mermaid/KaTeX render once the element actually has layout.
+/// Builds a tab's persistent DOM (paneEl > previewEl(.preview-scroll) >
+/// contentEl(article)), appends it to #content-wrap, and returns the
+/// fully-enumerated tab object — the one place this shape is declared, so
+/// every field a tab can ever carry is listed here even though most start
+/// empty/null. The editor side (editorEl) is created lazily, only when the
+/// tab first enters edit mode — see enterSplitMode — so a pure viewing
+/// session never touches CodeMirror at all.
 ///
-/// Structure: paneEl > previewEl(.preview-scroll) > contentEl(article).
-/// The editor side (editorEl) is created lazily, only when the tab first
-/// enters edit mode — see enterEditMode — so a pure viewing session never
-/// touches CodeMirror at all.
-async function loadTab(path) {
+/// Deliberately does NOT push onto state.tabs — callers differ on when
+/// that should happen. `loadTab` pushes only after its `open_markdown_file`
+/// invoke settles, so a failed open still leaves a tab (showing the error)
+/// but never a *half*-built one sitting in state.tabs mid-invoke.
+/// `newDocument` has no invoke to wait on, so it pushes immediately.
+function createTabShell(overrides) {
   const paneEl = document.createElement("div");
   paneEl.className = "tab-pane";
 
@@ -149,9 +165,12 @@ async function loadTab(path) {
   paneEl.appendChild(previewEl);
   els.contentWrap.appendChild(paneEl);
 
-  const tab = {
-    path,
-    title: basename(path),
+  return {
+    // "document" (an ordinary file or Untitled-document tab) unless a
+    // caller overrides it — see newWelcomeTab for the other value.
+    kind: "document",
+    path: null,
+    title: "",
     headings: [],
     hasMermaid: false,
     hasMath: false,
@@ -176,7 +195,19 @@ async function loadTab(path) {
     // revisited.
     previewNeedsEnrich: false,
     closeConfirmPending: false,
+    // Guards saveTab against a second concurrent save (e.g. a menu Save
+    // and a Cmd/Ctrl+S landing in the same tick) — see saveTab.
+    saving: false,
+    ...overrides,
   };
+}
+
+/// Load `path` into a new tab. Its pane is created but not shown —
+/// `activateTab` toggles visibility and does the (lazy, one-time)
+/// mermaid/KaTeX render once the element actually has layout.
+async function loadTab(path) {
+  const tab = createTabShell({ path, title: basename(path) });
+  const { contentEl } = tab;
 
   try {
     const res = await tauri.core.invoke("open_markdown_file", { path });
@@ -195,6 +226,111 @@ async function loadTab(path) {
   }
 
   state.tabs.push(tab);
+}
+
+/// Untitled document titles: "Untitled", then "Untitled 2", "Untitled 3", …
+/// — scans current tab titles rather than keeping a running counter, so a
+/// closed "Untitled 2" frees that number back up for the next Create,
+/// matching how most editors number untitled documents.
+function untitledTitle() {
+  const taken = new Set(state.tabs.map((t) => t.title));
+  if (!taken.has("Untitled")) return "Untitled";
+  let n = 2;
+  while (taken.has(`Untitled ${n}`)) n++;
+  return `Untitled ${n}`;
+}
+
+let newDocInFlight = false;
+
+/// Creates a brand-new, empty, never-saved document and drops it straight
+/// into edit mode — the "Create" action. No template text: a document
+/// nobody typed anything into is what makes the "closes with no unsaved-
+/// changes prompt" rule (see confirmClosable) apply for free, since
+/// `source: ""` / `savedSource: ""` means markDirty never flips to dirty
+/// until the user actually types something.
+///
+/// Must activate the tab *before* entering split mode: enterSplitMode
+/// constructs CodeMirror against the pane's real layout, which only
+/// exists once activateTab has added the "visible" class — the same
+/// ordering enterSplitMode's own comment documents for every other path
+/// into edit mode.
+async function newDocument() {
+  if (newDocInFlight) return;
+  newDocInFlight = true;
+  try {
+    const tab = createTabShell({ title: untitledTitle(), source: "", savedSource: "" });
+    state.tabs.push(tab);
+    await activateTab(state.tabs.length - 1);
+    await enterSplitMode(tab);
+    tab.editor?.focus();
+  } catch (err) {
+    console.error("failed to create a new document", err);
+  } finally {
+    newDocInFlight = false;
+  }
+}
+
+/// Clones the shared welcome-pane template (see index.html's
+/// #welcome-pane-template — the same Open File…/Create screen as the
+/// zero-tabs #empty-state, but with data-action attributes instead of
+/// ids, since several welcome tabs can be open at once and ids can't
+/// repeat) into `tab`'s contentEl, and wires its two buttons. Open File…
+/// goes straight to the same global dialog every other "open" path uses —
+/// it doesn't touch this tab, exactly like opening a file from a
+/// browser's New Tab page doesn't make that page disappear. Create is the
+/// one welcome-tab-specific action: it converts *this* tab into the
+/// Untitled document in place — see convertWelcomeTab.
+function buildWelcomePane(tab) {
+  tab.contentEl.classList.add("welcome");
+  tab.contentEl.replaceChildren(els.welcomeTemplate.content.cloneNode(true));
+  tab.contentEl
+    .querySelector('[data-action="open-file"]')
+    .addEventListener("click", openFileDialog);
+  tab.contentEl
+    .querySelector('[data-action="create"]')
+    .addEventListener("click", () => convertWelcomeTab(tab));
+}
+
+/// Turns a welcome tab into an ordinary Untitled document, in place — no
+/// second tab appears, matching a browser's New Tab page navigating to
+/// content rather than spawning another tab. Removing the "welcome" class
+/// is load-bearing, not tidiness: it's what gives .content its normal
+/// prose padding/reading-column width back before enterSplitMode's
+/// preview ever writes real rendered HTML into this same contentEl (see
+/// the .content.welcome rule in styles.css) — left in place it would
+/// silently break that document's layout.
+async function convertWelcomeTab(tab) {
+  tab.kind = "document";
+  tab.title = untitledTitle();
+  tab.source = "";
+  tab.savedSource = "";
+  tab.contentEl.classList.remove("welcome");
+  tab.contentEl.replaceChildren();
+  renderTabBar();
+  try {
+    await enterSplitMode(tab);
+    tab.editor?.focus();
+  } catch (err) {
+    console.error("failed to enter edit mode for a new document", err);
+  }
+}
+
+/// The "+" button, Cmd/Ctrl+N, and File ▸ New all land here now (not
+/// newDocument directly) — like a browser's tab-strip "+", this opens a
+/// closable "New Tab" page rather than jumping straight into an untitled
+/// document; Create on that page is what actually does the latter (see
+/// convertWelcomeTab). Several welcome tabs can coexist (repeated clicks
+/// just add more, same as a browser) — they all carry `path: null` and
+/// never collide with openPaths' path-based dedupe.
+async function newWelcomeTab() {
+  try {
+    const tab = createTabShell({ kind: "welcome", title: "New Tab" });
+    state.tabs.push(tab);
+    await activateTab(state.tabs.length - 1);
+    buildWelcomePane(tab);
+  } catch (err) {
+    console.error("failed to open a new tab", err);
+  }
 }
 
 /// Single entry point for every way a document can be opened — cold-start
@@ -228,37 +364,50 @@ async function drainAndOpen() {
   if (pending.length) await openPaths(pending);
 }
 
+/// Shared "is it OK to make this tab go away" check, used by both
+/// closeTab and the quit sequence (requestQuit). A clean tab always says
+/// yes immediately — this is what makes an untouched untitled document
+/// close with no prompt at all (requirement: an empty new document never
+/// asks). A dirty tab is switched to (so the user can see what they're
+/// about to decide about) and then run through the three-way modal;
+/// "cancel" refuses, "dont-save" allows, and "save" defers to `saveTab`'s
+/// own success/failure so a failed or cancelled save aborts the close
+/// too, same as cancel.
+async function confirmClosable(tab) {
+  if (!tab.dirty) return true;
+  if (tab.closeConfirmPending) return false; // already asking about this tab
+  tab.closeConfirmPending = true;
+  try {
+    const i = state.tabs.indexOf(tab);
+    if (i !== -1 && i !== state.activeIndex) await activateTab(i);
+    const choice = await confirmUnsaved(tab);
+    if (choice === "cancel") return false;
+    if (choice === "save") return await saveTab(tab);
+    return true; // "dont-save"
+  } finally {
+    tab.closeConfirmPending = false;
+  }
+}
+
 /// Both existing call sites (the tab's × button, Cmd/Ctrl+W) fire this
-/// without awaiting it, which is fine — but this function itself now
-/// awaits a confirmation dialog when the tab is dirty, which the
-/// synchronous version never did. That await is why `index` gets
-/// re-resolved below before acting on it.
+/// without awaiting it, which is fine — but confirmClosable can await a
+/// modal and, for an untitled tab choosing Save, a native save dialog on
+/// top of that. That await is why `index` gets re-resolved below before
+/// acting on it, rather than trusting the value this function was called
+/// with.
 async function closeTab(index) {
   const tab = state.tabs[index];
   if (!tab) return;
 
-  if (tab.dirty) {
-    if (tab.closeConfirmPending) return; // already asking about this tab
-    tab.closeConfirmPending = true;
-    let discard;
-    try {
-      discard = await tauri.dialog.confirm(`"${tab.title}" has unsaved changes. Discard them?`, {
-        title: "Unsaved changes",
-        kind: "warning",
-      });
-    } finally {
-      tab.closeConfirmPending = false;
-    }
-    if (!discard) return;
+  if (!(await confirmClosable(tab))) return;
 
-    // While the dialog was open, renderTabBar's per-tab click handlers
-    // (which capture a tab's position by closure, not identity) could
-    // have closed a different tab, shifting every index after it — or
-    // the user could have triggered a second close of this same tab.
-    // Re-resolve by identity rather than trusting the stale `index`.
-    index = state.tabs.indexOf(tab);
-    if (index === -1) return; // already gone
-  }
+  // renderTabBar's per-tab click handlers (which capture a tab's position
+  // by closure, not identity) could have closed a different tab while the
+  // above was awaiting, shifting every index after it — or the user could
+  // have triggered a second close of this same tab. Re-resolve by
+  // identity rather than trusting the stale `index`.
+  index = state.tabs.indexOf(tab);
+  if (index === -1) return; // already gone
 
   const [closed] = state.tabs.splice(index, 1);
   if (closed.previewTimer) clearTimeout(closed.previewTimer);
@@ -277,7 +426,7 @@ function renderTabBar() {
     const el = document.createElement("div");
     el.className = "tab" + (i === state.activeIndex ? " active" : "");
     el.setAttribute("role", "tab");
-    el.title = tab.path;
+    el.title = tab.path ?? tab.title; // null for an untitled, never-saved tab
 
     const title = document.createElement("span");
     title.className = "tab-title";
@@ -316,9 +465,20 @@ async function activateTab(index) {
 
   const tab = state.tabs[index];
   els.emptyState.style.display = tab ? "none" : "flex";
+  // "+" is redundant chrome with nothing to sit next to at zero tabs —
+  // the empty-state screen already offers Create/Open File… itself.
+  els.newTabBtn.classList.toggle("is-hidden", !tab);
   state.tabs.forEach((t, i) => t.paneEl.classList.toggle("visible", i === index));
-  els.editToggleBtn.disabled = !tab;
-  els.saveBtn.disabled = !tab || !tab.dirty;
+  // Visible only for a real, saved-to-disk file — not a welcome tab, and
+  // not a brand-new Untitled document (already created straight into
+  // edit mode; toggling it back to the read-only preview is still
+  // reachable via Cmd/Ctrl+E, just with no visible button for it, same as
+  // any other keyboard shortcut this app exposes without a matching
+  // toolbar control while its target is unavailable).
+  const canEditTab = tab && tab.kind === "document" && tab.path !== null;
+  els.editToggleBtn.disabled = !canEditTab;
+  els.editToggleBtn.classList.toggle("is-hidden", !canEditTab);
+  updateSaveButton();
 
   if (!tab) {
     tocObserver?.disconnect();
@@ -631,6 +791,19 @@ function ensureCodeMirror() {
 
 const PREVIEW_DEBOUNCE_MS = 200;
 
+/// Sole owner of the 💾 button's visibility: hidden (not merely disabled)
+/// unless the active tab is dirty — a brand-new untitled tab or a freshly
+/// opened file both start clean, so there's nothing to save yet. Uses
+/// `visibility`, not `display` (see the .icon-btn.is-hidden rule in
+/// styles.css), so the buttons after it don't shift horizontally every
+/// time a document's dirty state flips.
+function updateSaveButton() {
+  const tab = state.tabs[state.activeIndex];
+  const show = !!(tab && tab.dirty);
+  els.saveBtn.classList.toggle("is-hidden", !show);
+  els.saveBtn.disabled = !show;
+}
+
 /// Mark `tab` dirty/clean and, only when the value actually changes,
 /// reflect it in the tab bar and the save button — a full renderTabBar()
 /// rebuild on every keystroke (dirty is recomputed on every CodeMirror
@@ -640,7 +813,7 @@ function markDirty(tab, dirty) {
   tab.dirty = dirty;
   renderTabBar();
   if (state.tabs[state.activeIndex] === tab) {
-    els.saveBtn.disabled = !dirty;
+    updateSaveButton();
     updateDocumentTitle();
   }
 }
@@ -658,21 +831,86 @@ function updateDocumentTitle() {
 /// it's a dedicated command rather than tauri-plugin-fs). On failure the
 /// buffer, the dirty flag, and CodeMirror's undo history are all left
 /// untouched — a failed save must never look like a successful one.
+///
+/// Returns whether `tab` is clean once this settles — the tab-close and
+/// quit flows (confirmClosable, requestQuit) need to know whether a
+/// user-chosen "Save" actually succeeded before they proceed with closing
+/// anything, since a failed save or a cancelled save-as picker must abort
+/// the close, not silently discard the edit.
 async function saveTab(tab) {
-  if (!tab || !tab.editor || !tab.dirty) return;
-  els.saveBtn.disabled = true;
+  if (!tab || !tab.editor || !tab.dirty || tab.saving) return !tab?.dirty;
+  if (!tab.path) return saveTabAs(tab);
+
+  tab.saving = true;
+  if (state.tabs[state.activeIndex] === tab) els.saveBtn.disabled = true;
   try {
     const contents = tab.editor.getValue();
     await tauri.core.invoke("save_markdown_file", { path: tab.path, contents });
     tab.savedSource = contents;
     markDirty(tab, false);
+    return true;
   } catch (err) {
     console.error("save failed", err);
     tauri.dialog
       .message(`Couldn't save ${tab.title}:\n${err}`, { title: "Save failed", kind: "error" })
       .catch((dialogErr) => console.error("failed to show save-error dialog", dialogErr));
+    return false;
   } finally {
-    if (state.tabs[state.activeIndex] === tab) els.saveBtn.disabled = !tab.dirty;
+    tab.saving = false;
+    if (state.tabs[state.activeIndex] === tab) updateSaveButton();
+  }
+}
+
+/// The save path for a tab that's never been saved before (`tab.path ===
+/// null`): asks the OS for a filename and location via the native save
+/// dialog, then hands the result to `save_markdown_file_as`, which is what
+/// actually appends a `.md` extension if the user typed a bare name (path
+/// resolution stays in Rust — see CLAUDE.md). On success the tab becomes
+/// an ordinary path-backed tab, same as one opened from disk.
+async function saveTabAs(tab) {
+  if (tab.saving) return false;
+  tab.saving = true;
+  if (state.tabs[state.activeIndex] === tab) els.saveBtn.disabled = true;
+  try {
+    const picked = await tauri.dialog.save({
+      defaultPath: `${tab.title}.md`,
+      filters: [{ name: "Markdown", extensions: [...markdownExtensions] }],
+    });
+    if (!picked) return false; // user cancelled the picker
+
+    // Refuse rather than silently shadowing or closing the other tab —
+    // there's no data-loss-free way to resolve two tabs claiming the same
+    // path.
+    if (state.tabs.some((t) => t !== tab && t.path === picked)) {
+      await tauri.dialog
+        .message(`"${basename(picked)}" is already open in another tab.`, {
+          title: "Can't save here",
+          kind: "error",
+        })
+        .catch((dialogErr) => console.error("failed to show save-as-collision dialog", dialogErr));
+      return false;
+    }
+
+    const contents = tab.editor.getValue();
+    const finalPath = await tauri.core.invoke("save_markdown_file_as", { path: picked, contents });
+    tab.path = finalPath;
+    tab.title = basename(finalPath);
+    tab.savedSource = contents;
+    markDirty(tab, false);
+    // Relative image/link resolution just moved from the cwd fallback
+    // (see render_markdown's base_path doc comment in lib.rs) to this
+    // tab's real directory — the preview must re-render to pick that up.
+    schedulePreview(tab);
+    return true;
+  } catch (err) {
+    console.error("save failed", err);
+    tauri.dialog
+      .message(`Couldn't save ${tab.title}:\n${err}`, { title: "Save failed", kind: "error" })
+      .catch((dialogErr) => console.error("failed to show save-error dialog", dialogErr));
+    return false;
+  } finally {
+    tab.saving = false;
+    if (state.tabs[state.activeIndex] === tab) updateSaveButton();
   }
 }
 
@@ -1289,6 +1527,76 @@ function debounce(fn, ms) {
 }
 
 // ---------------------------------------------------------------------
+// Unsaved-changes modal + quit sequence. This is the app's first custom
+// modal — native tauri.dialog.confirm only offers two buttons, and "ask
+// the user whether to save" needs three (Save / Don't Save / Cancel).
+// ---------------------------------------------------------------------
+let modalOpen = false;
+let modalResolve = null;
+
+/// Shows the shared unsaved-changes modal for `tab` and resolves once the
+/// user picks "save" | "dont-save" | "cancel" — via a button, Enter
+/// (save), Escape (cancel), or a backdrop click (cancel). `modalOpen` is
+/// checked by the global keydown handler and the menu-action dispatcher
+/// so neither keyboard shortcuts nor menu items reach through the
+/// backdrop while this is up.
+function confirmUnsaved(tab) {
+  return new Promise((resolve) => {
+    const previouslyFocused = document.activeElement;
+    modalOpen = true;
+    modalResolve = (choice) => {
+      modalOpen = false;
+      modalResolve = null;
+      els.modalBackdrop.classList.remove("visible");
+      if (previouslyFocused instanceof HTMLElement) previouslyFocused.focus();
+      resolve(choice);
+    };
+    els.modalMessage.textContent = `Save changes to "${tab.title}"?`;
+    els.modalBackdrop.classList.add("visible");
+    els.modalSave.focus();
+  });
+}
+
+let quitting = false;
+
+/// Quitting is closing every tab at once, with the twist that a Cancel
+/// anywhere must abort the *whole* quit rather than leaving some tabs
+/// closed and others not — so, unlike closeTab, nothing is actually
+/// spliced out of state.tabs until every dirty tab has been resolved; the
+/// process just exits once they have been (quit_app == AppHandle::exit,
+/// which never re-enters the CloseRequested handler that led here — see
+/// lib.rs). Snapshotting state.tabs and re-resolving each tab's index by
+/// identity on every iteration (never carrying an index across an await)
+/// guards against the same "the tab bar changed while we were awaiting a
+/// dialog" hazard closeTab already documents — here the await window is a
+/// whole loop of modals and native save dialogs, not just one.
+async function requestQuit() {
+  if (quitting || modalOpen) return;
+  quitting = true;
+  const restoreIndex = state.activeIndex;
+  try {
+    for (const tab of state.tabs.slice()) {
+      const i = state.tabs.indexOf(tab);
+      if (i === -1 || !tab.dirty) continue;
+      await activateTab(i);
+      const choice = await confirmUnsaved(tab);
+      if (choice === "cancel") {
+        await activateTab(restoreIndex);
+        return;
+      }
+      if (choice === "save" && !(await saveTab(tab))) {
+        return; // failed write or a cancelled save-as picker — abort the quit
+      }
+    }
+    await tauri.core.invoke("quit_app");
+  } catch (err) {
+    console.error("quit sequence failed", err);
+  } finally {
+    quitting = false;
+  }
+}
+
+// ---------------------------------------------------------------------
 // Wiring
 // ---------------------------------------------------------------------
 function wireStaticUI() {
@@ -1306,8 +1614,39 @@ function wireStaticUI() {
   els.findNext.addEventListener("click", () => stepMatch(1));
   els.findClose.addEventListener("click", closeFind);
 
+  // Wired once here rather than per-call in confirmUnsaved — the modal's
+  // three buttons never change identity, only whether modalResolve is
+  // currently set (i.e. a modal is actually open).
+  els.modalSave.addEventListener("click", () => modalResolve?.("save"));
+  els.modalDontSave.addEventListener("click", () => modalResolve?.("dont-save"));
+  els.modalCancel.addEventListener("click", () => modalResolve?.("cancel"));
+  els.modalBackdrop.addEventListener("click", (e) => {
+    if (e.target === els.modalBackdrop) modalResolve?.("cancel");
+  });
+
   document.addEventListener("keydown", (e) => {
     if (e.isComposing) return; // IME composition — not a real shortcut keystroke
+
+    // The modal has no native focus trap (it's plain DOM, not <dialog>),
+    // and a native menu press isn't blocked by a DOM backdrop at all (see
+    // the "menu-action" listener in init) — so every other shortcut below
+    // must be unreachable while it's open, not just visually obscured.
+    if (modalOpen) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        modalResolve?.("cancel");
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        modalResolve?.("save");
+      } else if (e.key === "Tab") {
+        e.preventDefault();
+        const order = [els.modalSave, els.modalDontSave, els.modalCancel];
+        const from = order.indexOf(document.activeElement);
+        order[(from + (e.shiftKey ? -1 : 1) + order.length) % order.length].focus();
+      }
+      return;
+    }
+
     const mod = e.metaKey || e.ctrlKey;
     if (mod && e.key.toLowerCase() === "f") {
       e.preventDefault();
@@ -1322,10 +1661,17 @@ function wireStaticUI() {
       e.preventDefault();
       saveTab(state.tabs[state.activeIndex]);
     }
+    // No branches for New/Open/Quit here, deliberately — those are
+    // menu-only (see the "menu-action" listener in init). A double-fired
+    // New would create two tabs, the one non-idempotent action in this
+    // app, so it gets exactly one trigger path instead of two racing
+    // ones.
   });
 
   els.editToggleBtn.addEventListener("click", toggleEditMode);
   els.saveBtn.addEventListener("click", () => saveTab(state.tabs[state.activeIndex]));
+  els.newTabBtn.addEventListener("click", newWelcomeTab);
+  els.newBtnMain.addEventListener("click", newDocument);
 }
 
 async function wireDragDrop() {
@@ -1343,11 +1689,32 @@ async function wireDragDrop() {
   });
 }
 
+/// Dispatches a native menu click (see src-tauri/src/menu.rs) to the same
+/// actions their toolbar-button/keyboard equivalents use. Guarded the same
+/// way as the global keydown handler: a native menu press isn't blocked
+/// by the modal's DOM backdrop at all, so it needs its own check.
+function handleMenuAction(id) {
+  if (modalOpen) return;
+  switch (id) {
+    case "new":
+      newWelcomeTab();
+      break;
+    case "open":
+      openFileDialog();
+      break;
+    case "save":
+      saveTab(state.tabs[state.activeIndex]);
+      break;
+    case "quit":
+      requestQuit();
+      break;
+  }
+}
+
 async function init() {
   await applyTheme(); // as early as possible, before anything else paints
   wireStaticUI();
 
-  els.openFileBtn.addEventListener("click", openFileDialog);
   els.openFileBtnMain.addEventListener("click", openFileDialog);
   els.themeBtn.addEventListener("click", cycleTheme);
 
@@ -1359,6 +1726,19 @@ async function init() {
   // payload, the event is just a nudge to go drain it again.
   await drainAndOpen();
   await tauri.event.listen("files-pending", () => drainAndOpen());
+  await tauri.event.listen("menu-action", ({ payload }) => handleMenuAction(payload));
+  // Rust's CloseRequested handler prevents the close and emits this
+  // instead of letting the window close outright — see lib.rs's
+  // on_window_event. requestQuit runs the same per-tab unsaved-changes
+  // sequence as the quit menu item, then calls quit_app itself.
+  await tauri.event.listen("close-requested", () => requestQuit());
+
+  // Only after both listeners above are registered: emitting
+  // "close-requested" any earlier would have nothing listening for it and
+  // the event would simply be lost (Tauri doesn't replay events) — the
+  // same failure mode as the files-pending queue this mirrors. See
+  // AppState::frontend_ready's doc comment in lib.rs.
+  await tauri.core.invoke("mark_frontend_ready");
 
   try {
     await wireDragDrop();

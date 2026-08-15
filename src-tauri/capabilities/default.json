@@ -9,6 +9,6 @@
     "opener:allow-open-path",
     "dialog:allow-open",
     "dialog:allow-save",
-    "dialog:allow-confirm"
+    "dialog:allow-message"
   ]
 }

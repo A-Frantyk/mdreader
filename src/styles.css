@@ -53,11 +53,18 @@ html, body {
   flex: 0 0 auto;
 }
 
+/* flex-grow: 0, not 1 — the strip should hug its tabs' own width (so the
+   "+" button sits right after the last tab, browser-tab-style) rather
+   than stretching to fill the row. flex-shrink stays 1 (with min-width:0)
+   so once tabs *do* overflow the available width, this still shrinks and
+   scrolls internally instead of pushing "+"/.tabbar-controls off-screen —
+   see .tabbar-controls' margin-left:auto below for how the leftover space
+   this no longer claims gets used instead. */
 .tabbar {
   display: flex;
   align-items: stretch;
   overflow-x: auto;
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-width: 0;
 }
 
@@ -67,6 +74,10 @@ html, body {
   gap: 2px;
   padding: 0 6px;
   flex: 0 0 auto;
+  /* Standard flex idiom for "pin the last item to the row's far edge":
+     absorbs whatever width .tabbar no longer force-claims, so this group
+     stays flush right regardless of how many tabs are open. */
+  margin-left: auto;
   border-left: 1px solid var(--border);
 }
 
@@ -103,6 +114,29 @@ html, body {
 .icon-btn.active {
   background: var(--accent-weak);
   color: var(--accent);
+}
+
+/* display, not visibility: Edit and Save read as one tight pair, so a
+   reserved-but-invisible Save slot between them (the visibility:hidden
+   approach) looked like Edit had drifted away from its neighbors. Theme
+   shifts a few px when Save appears/disappears — an accepted trade-off,
+   see updateSaveButton in app.js. */
+.icon-btn.is-hidden {
+  display: none;
+}
+
+/* Sits between the scrollable .tabbar and the fixed .tabbar-controls —
+   outside renderTabBar's wipe target and outside .tabbar's own
+   overflow-x:auto region, so it can never scroll away with an overflowing
+   tab strip and never needs sticky positioning to stay put. align-self
+   overrides .tabbar-row's own align-items:stretch — without it this sits
+   flex-start (top-aligned) instead of centered like the buttons inside
+   .tabbar-controls, since .icon-btn gives it an explicit height and a
+   stretch container doesn't re-center a non-stretching definite-size item. */
+#new-tab-btn {
+  flex: 0 0 auto;
+  align-self: center;
+  border-left: 1px solid var(--border);
 }
 
 .tab {
@@ -340,6 +374,17 @@ html, body {
 
 .empty-state .hint { font-size: 13px; }
 
+/* .empty-state itself is a column (see above) — this row wraps Open File…
+   and Create side by side without disturbing that, since app.js owns
+   #empty-state's own inline display and can't be repurposed as a row. */
+.empty-actions {
+  display: flex;
+  gap: 8px;
+  margin: 8px 0 4px;
+}
+
+.empty-actions .open-btn { margin: 0; }
+
 .open-btn {
   margin: 8px 0 4px;
   padding: 10px 22px;
@@ -348,13 +393,42 @@ html, body {
   font-family: inherit;
   color: #fff;
   background: var(--accent);
-  border: none;
+  /* Transparent, not none: .open-btn.secondary below has a real 1px
+     border, and with no explicit height on either variant that 2px would
+     otherwise make secondary buttons taller than primary ones sitting
+     right next to them (Open File… vs Create, Save vs Don't Save/Cancel).
+     Reserving the same width here keeps every primary/secondary pair the
+     same height. */
+  border: 1px solid transparent;
   border-radius: 8px;
   cursor: pointer;
 }
 
 .open-btn:hover { filter: brightness(1.08); }
 .open-btn:active { filter: brightness(0.95); }
+
+/* Ghost variant — used wherever a button needs to sit next to a primary
+   .open-btn without competing with it (Create next to Open File…, and
+   the Don't Save/Cancel buttons in the unsaved-changes modal). */
+.open-btn.secondary {
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--border);
+}
+
+.open-btn.secondary:hover { filter: none; background: var(--accent-weak); }
+.open-btn.secondary:active { filter: none; background: var(--border); }
+
+/* Create's outline picks up Open File…'s fill color, pairing a solid
+   primary CTA with a matching accent-outlined secondary one. Scoped to
+   .empty-actions (not .open-btn.secondary generally) so it covers every
+   place this same Open File…/Create screen appears — the global
+   zero-tabs empty state and every welcome tab's cloned pane alike —
+   without recoloring the modal's Don't Save/Cancel, which share the same
+   base classes but shouldn't visually claim equal weight with Save. */
+.empty-actions .open-btn.secondary {
+  border-color: var(--accent);
+}
 
 /* ---------- rendered markdown ---------- */
 /* No display:none/.visible toggle here — visibility is owned by the
@@ -368,6 +442,20 @@ html, body {
   font-family: var(--font);
   font-size: 16px;
   line-height: 1.65;
+}
+
+/* A welcome tab's contentEl holds a cloned .empty-state instead of
+   rendered markdown (see buildWelcomePane in app.js) — .empty-state's own
+   height:100% needs a definite-height ancestor to center against, and
+   .content's default height is auto (it just grows with prose), so
+   without this override the welcome screen would render top-aligned
+   instead of centered. Removed by convertWelcomeTab before this tab ever
+   gets real rendered HTML — left in place it would break that document's
+   normal reading-column width and padding. */
+.content.welcome {
+  height: 100%;
+  max-width: none;
+  padding: 0;
 }
 
 .content h1, .content h2, .content h3,
@@ -608,3 +696,44 @@ html, body {
 }
 
 .drop-overlay.visible { display: flex; }
+
+/* ---------- unsaved-changes modal ----------
+   The app's first custom modal (see confirmUnsaved in app.js) — native
+   tauri.dialog.confirm only offers two buttons, and Save/Don't Save/Cancel
+   needs three. Popover recipe borrowed from .findbar above. */
+.modal-backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.35);
+  z-index: 100;
+}
+
+.modal-backdrop.visible { display: flex; }
+
+.modal {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
+  padding: 20px;
+  max-width: 360px;
+  width: calc(100% - 32px);
+}
+
+.modal-message {
+  margin: 0 0 16px;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.modal-actions .open-btn { margin: 0; padding: 8px 16px; font-size: 13px; }

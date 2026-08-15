@@ -1,7 +1,10 @@
 mod render;
+#[cfg(desktop)]
+mod menu;
 
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -27,9 +30,19 @@ include!(concat!(env!("OUT_DIR"), "/markdown_extensions.rs"));
 /// it would silently lose the event. Queuing unconditionally and treating
 /// the emitted event as a hint (not the payload) means the frontend can
 /// always recover by draining on load, regardless of timing.
+///
+/// `frontend_ready` guards the same class of race for the close handshake
+/// (see the `on_window_event` handler in `run`): a `CloseRequested` that
+/// fires before `app.js` has registered its `close-requested` listener
+/// would have its `prevent_close()` + emit silently dropped, leaving the
+/// window unclosable. The frontend flips this to `true` (via
+/// `mark_frontend_ready`) only after that listener exists; until then the
+/// handler lets the window close normally instead of trying to hand off
+/// to a listener that isn't there yet.
 struct AppState {
     pending: Mutex<Vec<PathBuf>>,
     markdown_extensions: HashSet<String>,
+    frontend_ready: AtomicBool,
 }
 
 #[derive(serde::Serialize)]
@@ -42,6 +55,27 @@ fn is_markdown_path(state: &AppState, path: &std::path::Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
         .is_some_and(|e| state.markdown_extensions.contains(&e.to_ascii_lowercase()))
+}
+
+/// Ensure a save-dialog result ends up with a markdown extension, for the
+/// "create a new document" flow: the OS save dialog lets a user type a
+/// bare name (`notes`) or, on GTK, never appends an extension at all even
+/// when a filter is set. Appends `MARKDOWN_EXTENSIONS[0]` rather than
+/// replacing whatever's already there — `Path::set_extension` would turn
+/// `my.notes` into `my.md`, silently discarding part of the name the user
+/// typed. Appending also matches what the native save dialogs themselves
+/// do on macOS/Windows when they add a default extension, so all three
+/// platforms converge on the same result. Already-markdown paths (matched
+/// via `is_markdown_path`, so extension casing is preserved) pass through
+/// unchanged.
+fn normalize_markdown_path(state: &AppState, path: &std::path::Path) -> PathBuf {
+    if is_markdown_path(state, path) {
+        return path.to_path_buf();
+    }
+    let mut file_name = path.file_name().unwrap_or_default().to_owned();
+    file_name.push(".");
+    file_name.push(MARKDOWN_EXTENSIONS[0]);
+    path.with_file_name(file_name)
 }
 
 /// Render markdown source and grant the webview's asset-protocol scope
@@ -110,10 +144,17 @@ fn queue_markdown_args(app: &AppHandle, paths: impl Iterator<Item = PathBuf>) {
 
 /// Lets the frontend classify a clicked link ("try to open it as a
 /// document" vs "hand it to the OS") without hand-duplicating the
-/// extension list that already lives in `tauri.conf.json`.
+/// extension list that already lives in `tauri.conf.json`. Returns
+/// `MARKDOWN_EXTENSIONS` in its declared order rather than iterating
+/// `state.markdown_extensions` (a `HashSet`, so iteration order is
+/// unspecified and varies run to run) — order matters here because the
+/// frontend's save-as filter list feeds the native save dialog, and both
+/// NSSavePanel (macOS) and the Windows common dialog append the *first*
+/// filter extension when the user types a bare filename. A `HashSet`
+/// iteration order would make that default extension nondeterministic.
 #[tauri::command]
-fn markdown_extensions(state: tauri::State<AppState>) -> Vec<String> {
-    state.markdown_extensions.iter().cloned().collect()
+fn markdown_extensions() -> Vec<String> {
+    MARKDOWN_EXTENSIONS.iter().map(|s| s.to_string()).collect()
 }
 
 #[tauri::command(async)]
@@ -205,6 +246,44 @@ fn save_markdown_file(
     atomic_write(path, &contents)
 }
 
+/// The write half of "create a new document": the target came straight
+/// out of a native save dialog, so unlike `save_markdown_file` it isn't
+/// guaranteed to already have a markdown extension — `normalize_markdown_path`
+/// appends one if needed. Reuses `atomic_write` verbatim (same validated,
+/// single-purpose write path as `save_markdown_file`, not a new one) and
+/// returns the final path so the frontend never has to build or guess an
+/// extension itself.
+#[tauri::command(async)]
+fn save_markdown_file_as(
+    state: tauri::State<AppState>,
+    path: String,
+    contents: String,
+) -> Result<String, String> {
+    let target = normalize_markdown_path(&state, std::path::Path::new(&path));
+    atomic_write(&target, &contents)?;
+    Ok(target.to_string_lossy().into_owned())
+}
+
+/// Flip once `app.js`'s `close-requested` listener is registered — see
+/// `AppState::frontend_ready`'s doc comment for why this exists.
+#[tauri::command]
+fn mark_frontend_ready(state: tauri::State<AppState>) {
+    state.frontend_ready.store(true, Ordering::Relaxed);
+}
+
+/// The only sanctioned way this app ends itself. `AppHandle::exit` sends
+/// `Message::RequestExit`, which the runtime turns into an unprevented
+/// `RunEvent::ExitRequested` and then `ControlFlow::Exit` directly — it
+/// does not re-emit `WindowEvent::CloseRequested`, so calling this from
+/// the frontend's already-confirmed quit sequence can't loop back into
+/// the same prompt. `window.destroy()` was deliberately not used here: it
+/// would need its own capability grant, where `AppHandle::exit` needs
+/// none.
+#[tauri::command]
+fn quit_app(app: AppHandle) {
+    app.exit(0);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let context = tauri::generate_context!();
@@ -215,9 +294,24 @@ pub fn run() {
         .manage(AppState {
             pending: Mutex::new(Vec::new()),
             markdown_extensions: configured_extensions,
+            frontend_ready: AtomicBool::new(false),
         })
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init());
+
+    // A hand-built menu, not `Menu::default()` — see menu.rs's module doc
+    // for why the default can't be reused (no File submenu on Linux, and
+    // its Window/File submenus carry an accelerator that collides with
+    // this app's own Cmd/Ctrl+W). `Builder::menu` (not `App::set_menu` in
+    // `.setup()`) so `Builder::build`'s "only install the macOS default
+    // when no menu was set" check suppresses that default outright,
+    // instead of installing-then-replacing it. Both `Builder::menu` and
+    // `Builder::on_menu_event` are `#[cfg(desktop)]` in the tauri crate
+    // itself — matching this project's mobile-is-not-a-target scope, but
+    // still gated here rather than assumed, per the platform-gating
+    // invariant.
+    #[cfg(desktop)]
+    let builder = builder.menu(menu::build).on_menu_event(menu::handle);
 
     // Entry path 3 (app already running, forward the new process's argv,
     // then let it exit) is Windows/Linux-only. On macOS this plugin
@@ -248,13 +342,40 @@ pub fn run() {
             queue_markdown_args(app.handle(), std::env::args_os().skip(1).map(PathBuf::from));
             Ok(())
         })
+        // Not platform-gated (`WindowEvent::CloseRequested` carries no
+        // `#[cfg]` in the tauri crate) — intercepts the window's close
+        // button/Alt+F4/Cmd+W-on-titlebar the same way on every platform.
+        // `prevent_close()` is called synchronously, in the same handler
+        // invocation that receives the event: the runtime checks whether
+        // it was called immediately after running listeners, so any
+        // `await` before it would let the window close anyway — this
+        // handler can only prevent-and-emit, never await the frontend's
+        // answer. The frontend drives the actual unsaved-changes prompt
+        // sequence after receiving "close-requested", then calls
+        // `quit_app` (== `AppHandle::exit`) when done, which does not
+        // loop back into this handler.
+        .on_window_event(|window, event| {
+            if window.label() != "main" {
+                return;
+            }
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if !window.state::<AppState>().frontend_ready.load(Ordering::Relaxed) {
+                    return; // no listener could exist yet — let it close normally
+                }
+                api.prevent_close();
+                let _ = window.emit("close-requested", ());
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             markdown_extensions,
             drain_pending_files,
             open_markdown_file,
             read_markdown_source,
             render_markdown,
-            save_markdown_file
+            save_markdown_file,
+            save_markdown_file_as,
+            mark_frontend_ready,
+            quit_app
         ])
         .build(context)
         .expect("error while building tauri application")
@@ -286,6 +407,7 @@ mod tests {
         AppState {
             pending: Mutex::new(Vec::new()),
             markdown_extensions: ["md", "markdown", "mdown", "mkd"].iter().map(|s| s.to_string()).collect(),
+            frontend_ready: AtomicBool::new(false),
         }
     }
 
@@ -309,6 +431,52 @@ mod tests {
         assert!(!is_markdown_path(&state, std::path::Path::new("a.txt")));
         assert!(!is_markdown_path(&state, std::path::Path::new("a")));
         assert!(!is_markdown_path(&state, std::path::Path::new(".zshrc")));
+    }
+
+    #[test]
+    fn normalize_markdown_path_appends_extension_to_a_bare_name() {
+        let state = test_state();
+        assert_eq!(
+            normalize_markdown_path(&state, std::path::Path::new("notes")),
+            PathBuf::from(format!("notes.{}", MARKDOWN_EXTENSIONS[0]))
+        );
+    }
+
+    #[test]
+    fn normalize_markdown_path_leaves_an_already_markdown_path_untouched() {
+        let state = test_state();
+        assert_eq!(
+            normalize_markdown_path(&state, std::path::Path::new("notes.md")),
+            PathBuf::from("notes.md")
+        );
+        assert_eq!(
+            normalize_markdown_path(&state, std::path::Path::new("notes.MD")),
+            PathBuf::from("notes.MD")
+        );
+    }
+
+    #[test]
+    fn normalize_markdown_path_appends_rather_than_replacing_a_non_markdown_extension() {
+        // set_extension would turn "my.notes" into "my.md", silently
+        // discarding part of the name the user typed — append instead.
+        let state = test_state();
+        assert_eq!(
+            normalize_markdown_path(&state, std::path::Path::new("notes.txt")),
+            PathBuf::from(format!("notes.txt.{}", MARKDOWN_EXTENSIONS[0]))
+        );
+        assert_eq!(
+            normalize_markdown_path(&state, std::path::Path::new("my.notes")),
+            PathBuf::from(format!("my.notes.{}", MARKDOWN_EXTENSIONS[0]))
+        );
+    }
+
+    #[test]
+    fn normalize_markdown_path_preserves_the_parent_directory() {
+        let state = test_state();
+        assert_eq!(
+            normalize_markdown_path(&state, std::path::Path::new("/some/dir/notes")),
+            PathBuf::from(format!("/some/dir/notes.{}", MARKDOWN_EXTENSIONS[0]))
+        );
     }
 
     #[test]

@@ -13,10 +13,10 @@
     <div class="app">
       <div class="tabbar-row">
         <div class="tabbar" id="tabbar" role="tablist" aria-label="Open documents"></div>
+        <button id="new-tab-btn" class="icon-btn is-hidden" title="New tab (Cmd/Ctrl+N)">+</button>
         <div class="tabbar-controls">
-          <button id="edit-toggle-btn" class="icon-btn" title="Edit (Cmd/Ctrl+E)" disabled>&#9998;</button>
-          <button id="save-btn" class="icon-btn" title="Save (Cmd/Ctrl+S)" disabled>&#128190;</button>
-          <button id="open-file-btn" class="icon-btn" title="Open file…">+</button>
+          <button id="edit-toggle-btn" class="icon-btn is-hidden" title="Edit (Cmd/Ctrl+E)" disabled>&#9998;</button>
+          <button id="save-btn" class="icon-btn is-hidden" title="Save (Cmd/Ctrl+S)" disabled>&#128190;</button>
           <button id="theme-btn" class="icon-btn" title="Theme"></button>
         </div>
       </div>
@@ -30,7 +30,10 @@
         <main class="content-wrap" id="content-wrap">
           <div id="empty-state" class="empty-state">
             <p>No document open.</p>
-            <button id="open-file-btn-main" class="open-btn">Open File…</button>
+            <div class="empty-actions">
+              <button id="open-file-btn-main" class="open-btn">Open File…</button>
+              <button id="new-btn-main" class="open-btn secondary">Create</button>
+            </div>
             <p class="hint">or drop a Markdown file here, or open one from your file manager.</p>
           </div>
           <!-- Each open tab gets its own persistent div.tab-pane, appended
@@ -52,6 +55,39 @@
       </div>
 
       <div class="drop-overlay" id="drop-overlay">Drop to open</div>
+
+      <!-- Cloned into a welcome tab's contentEl by buildWelcomePane in
+           app.js — same screen as #empty-state above, but with
+           data-action attributes instead of ids: a cloned <template>
+           can't reuse ids (several welcome tabs can be open at once). Keep
+           this in sync with #empty-state by hand if that one ever changes;
+           kept as a separate declaration rather than sharing one node
+           since #empty-state is a singleton and this isn't. -->
+      <template id="welcome-pane-template">
+        <div class="empty-state">
+          <p>No document open.</p>
+          <div class="empty-actions">
+            <button type="button" class="open-btn" data-action="open-file">Open File…</button>
+            <button type="button" class="open-btn secondary" data-action="create">Create</button>
+          </div>
+          <p class="hint">or drop a Markdown file here, or open one from your file manager.</p>
+        </div>
+      </template>
+
+      <!-- Unsaved-changes prompt, shared by tab-close and app-quit (see
+           confirmUnsaved in app.js). The app's first custom modal — native
+           tauri.dialog.confirm only offers two buttons, and this needs
+           three (Save / Don't Save / Cancel). -->
+      <div class="modal-backdrop" id="modal-backdrop">
+        <div class="modal" role="alertdialog" aria-modal="true" aria-labelledby="modal-message">
+          <p class="modal-message" id="modal-message"></p>
+          <div class="modal-actions">
+            <button id="modal-save" class="open-btn">Save</button>
+            <button id="modal-dont-save" class="open-btn secondary">Don't Save</button>
+            <button id="modal-cancel" class="open-btn secondary">Cancel</button>
+          </div>
+        </div>
+      </div>
     </div>
 
     <script src="app.js"></script>

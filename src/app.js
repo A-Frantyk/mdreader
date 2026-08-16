@@ -55,15 +55,9 @@ function extOf(path) {
   return dot === -1 ? "" : name.slice(dot + 1).toLowerCase();
 }
 
-// ---------------------------------------------------------------------
-// Theme: Light / Dark only — a plain, persisted 2-state toggle. On first
-// launch (nothing in localStorage yet), the OS's current preference is
-// read once as a starting point and immediately persisted as an explicit
-// choice; from then on the app never re-consults the OS, so an OS theme
-// flip mid-session doesn't silently relabel anything. See the
-// [data-theme] blocks in styles.css and the two code-theme-*.css files
-// build.rs generates.
-// ---------------------------------------------------------------------
+// On first launch the OS's current theme preference is read once and
+// persisted as an explicit choice; the app never re-consults the OS
+// after that, so a later OS theme flip doesn't silently relabel anything.
 const THEME_KEY = "mdreader.theme";
 const THEME_ICON = { light: "☀", dark: "☾" };
 
@@ -71,7 +65,7 @@ function themePreference() {
   let pref = localStorage.getItem(THEME_KEY);
   if (!pref) {
     pref = darkQuery.matches ? "dark" : "light";
-    localStorage.setItem(THEME_KEY, pref); // one-time OS-based default, persisted immediately
+    localStorage.setItem(THEME_KEY, pref);
   }
   return pref;
 }
@@ -107,30 +101,18 @@ function cycleTheme() {
   applyTheme();
 }
 
-// ---------------------------------------------------------------------
-// Split-pane ratio: one persisted preference shared by every tab, same
-// pattern as THEME_KEY above (a bare-string localStorage key, a
-// `*Preference()` getter that seeds+persists a default on first read).
-// Global rather than per-tab deliberately — dragging the divider is a
-// statement about how you want to work, not about one document, so a
-// newly split tab already matches the last ratio you set instead of
-// jumping back to 50/50. See attachSplitterDrag for where this is read
-// and written.
-// ---------------------------------------------------------------------
+// Split-pane ratio is a single preference shared by every tab, not
+// per-tab — a newly split tab starts at the last ratio you dragged to,
+// rather than jumping back to 50/50. See attachSplitterDrag.
 const SPLIT_RATIO_KEY = "mdreader.splitRatio";
 const SPLIT_RATIO_DEFAULT = 50;
-const SPLIT_MIN_PANE_PX = 160; // neither pane collapses to unusably narrow
+const SPLIT_MIN_PANE_PX = 160;
 
 function splitRatio() {
   const stored = Number(localStorage.getItem(SPLIT_RATIO_KEY));
   return Number.isFinite(stored) && stored > 0 ? stored : SPLIT_RATIO_DEFAULT;
 }
 
-// ---------------------------------------------------------------------
-// Open-file dialog, filtered to the extensions this app is registered
-// for (see markdownExtensions below) — feeds the same openPaths() that
-// every other way of opening a file goes through.
-// ---------------------------------------------------------------------
 async function openFileDialog() {
   const selection = await tauri.dialog.open({
     multiple: true,
@@ -138,10 +120,6 @@ async function openFileDialog() {
   });
   if (selection) await openPaths(Array.isArray(selection) ? selection : [selection]);
 }
-
-// ---------------------------------------------------------------------
-// Opening documents
-// ---------------------------------------------------------------------
 
 /// Builds a tab's persistent DOM (paneEl > previewEl(.preview-scroll) >
 /// contentEl(article)), appends it to #content-wrap, and returns the
@@ -170,8 +148,6 @@ function createTabShell(overrides) {
   els.contentWrap.appendChild(paneEl);
 
   return {
-    // "document" (an ordinary file or Untitled-document tab) unless a
-    // caller overrides it — see newWelcomeTab for the other value.
     kind: "document",
     path: null,
     title: "",
@@ -275,16 +251,10 @@ async function newDocument() {
   }
 }
 
-/// Clones the shared welcome-pane template (see index.html's
-/// #welcome-pane-template — the same Open File…/Create screen as the
-/// zero-tabs #empty-state, but with data-action attributes instead of
-/// ids, since several welcome tabs can be open at once and ids can't
-/// repeat) into `tab`'s contentEl, and wires its two buttons. Open File…
-/// goes straight to the same global dialog every other "open" path uses —
-/// it doesn't touch this tab, exactly like opening a file from a
-/// browser's New Tab page doesn't make that page disappear. Create is the
-/// one welcome-tab-specific action: it converts *this* tab into the
-/// Untitled document in place — see convertWelcomeTab.
+/// Clones the shared welcome-pane template (index.html's
+/// #welcome-pane-template) into `tab`'s contentEl — data-action
+/// attributes instead of ids, since several welcome tabs can be open at
+/// once and ids can't repeat in a cloned template.
 function buildWelcomePane(tab) {
   tab.contentEl.classList.add("welcome");
   tab.contentEl.replaceChildren(els.welcomeTemplate.content.cloneNode(true));
@@ -320,12 +290,7 @@ async function convertWelcomeTab(tab) {
   }
 }
 
-/// The "+" button, Cmd/Ctrl+N, and File ▸ New all land here now (not
-/// newDocument directly) — like a browser's tab-strip "+", this opens a
-/// closable "New Tab" page rather than jumping straight into an untitled
-/// document; Create on that page is what actually does the latter (see
-/// convertWelcomeTab). Several welcome tabs can coexist (repeated clicks
-/// just add more, same as a browser) — they all carry `path: null` and
+/// Several welcome tabs can coexist — they all carry `path: null` and
 /// never collide with openPaths' path-based dedupe.
 async function newWelcomeTab() {
   try {
@@ -338,12 +303,9 @@ async function newWelcomeTab() {
   }
 }
 
-/// Single entry point for every way a document can be opened — cold-start
-/// argv/RunEvent::Opened (via the pending queue), an already-running
-/// instance receiving a forwarded path, a file drop, and a same-document
-/// link click. Sequences loads (no torn state from concurrent opens of
-/// the same path) and dedupes against both open tabs and in-flight loads,
-/// then activates once at the end.
+/// Single entry point for every way a document can be opened. Dedupes
+/// against both open tabs and in-flight loads, then activates once at
+/// the end.
 async function openPaths(paths) {
   let lastTouched = -1;
   for (const path of paths) {
@@ -370,17 +332,13 @@ async function drainAndOpen() {
 }
 
 /// Shared "is it OK to make this tab go away" check, used by both
-/// closeTab and the quit sequence (requestQuit). A clean tab always says
-/// yes immediately — this is what makes an untouched untitled document
-/// close with no prompt at all (requirement: an empty new document never
-/// asks). A dirty tab is switched to (so the user can see what they're
-/// about to decide about) and then run through the three-way modal;
-/// "cancel" refuses, "dont-save" allows, and "save" defers to `saveTab`'s
-/// own success/failure so a failed or cancelled save aborts the close
-/// too, same as cancel.
+/// closeTab and requestQuit. A dirty tab is switched to first (so the
+/// user sees what they're deciding about), then run through the
+/// three-way modal — "save" defers to saveTab's own success/failure, so
+/// a failed or cancelled save aborts the close too, same as "cancel".
 async function confirmClosable(tab) {
   if (!tab.dirty) return true;
-  if (tab.closeConfirmPending) return false; // already asking about this tab
+  if (tab.closeConfirmPending) return false;
   tab.closeConfirmPending = true;
   try {
     const i = state.tabs.indexOf(tab);
@@ -394,12 +352,6 @@ async function confirmClosable(tab) {
   }
 }
 
-/// Both existing call sites (the tab's × button, Cmd/Ctrl+W) fire this
-/// without awaiting it, which is fine — but confirmClosable can await a
-/// modal and, for an untitled tab choosing Save, a native save dialog on
-/// top of that. That await is why `index` gets re-resolved below before
-/// acting on it, rather than trusting the value this function was called
-/// with.
 async function closeTab(index) {
   const tab = state.tabs[index];
   if (!tab) return;
@@ -412,7 +364,7 @@ async function closeTab(index) {
   // have triggered a second close of this same tab. Re-resolve by
   // identity rather than trusting the stale `index`.
   index = state.tabs.indexOf(tab);
-  if (index === -1) return; // already gone
+  if (index === -1) return;
 
   const [closed] = state.tabs.splice(index, 1);
   if (closed.previewTimer) clearTimeout(closed.previewTimer);
@@ -422,9 +374,6 @@ async function closeTab(index) {
   activateTab(Math.min(index, state.tabs.length - 1));
 }
 
-// ---------------------------------------------------------------------
-// Tab bar / activation
-// ---------------------------------------------------------------------
 function renderTabBar() {
   els.tabbar.innerHTML = "";
   state.tabs.forEach((tab, i) => {
@@ -474,12 +423,9 @@ async function activateTab(index) {
   // the empty-state screen already offers Create/Open File… itself.
   els.newTabBtn.classList.toggle("is-hidden", !tab);
   state.tabs.forEach((t, i) => t.paneEl.classList.toggle("visible", i === index));
-  // Visible only for a real, saved-to-disk file — not a welcome tab, and
-  // not a brand-new Untitled document (already created straight into
-  // edit mode; toggling it back to the read-only preview is still
-  // reachable via Cmd/Ctrl+E, just with no visible button for it, same as
-  // any other keyboard shortcut this app exposes without a matching
-  // toolbar control while its target is unavailable).
+  // Visible only for a real, saved-to-disk file — a brand-new Untitled
+  // document is already in edit mode, and toggling back is still
+  // reachable via Cmd/Ctrl+E even with no visible button for it.
   const canEditTab = tab && tab.kind === "document" && tab.path !== null;
   els.editToggleBtn.disabled = !canEditTab;
   els.editToggleBtn.classList.toggle("is-hidden", !canEditTab);
@@ -507,10 +453,8 @@ async function activateTab(index) {
     ]);
   }
 
-  // CodeMirror lays out against the DOM at creation time; if that
-  // happened while this pane was display:none (e.g. edit mode was
-  // entered on a background tab — not currently reachable, but cheap
-  // to guard), it renders blank until told to re-measure.
+  // Re-measure in case CodeMirror last laid out while this pane was
+  // display:none, which leaves it rendering blank until refreshed.
   tab.editor?.refresh();
   els.editToggleBtn.classList.toggle("active", tab.mode === "split");
 }
@@ -559,13 +503,9 @@ function updateToc(tab) {
   });
 }
 
-// ---------------------------------------------------------------------
-// Images and links. render.rs already resolved every relative
-// image/link destination to an absolute filesystem path and left every
-// external URL (scheme, mailto:, tel:) untouched — so classification
-// here is just "does this look like an absolute path or a URL", not path
-// arithmetic.
-// ---------------------------------------------------------------------
+// render.rs already resolved every relative image/link destination to an
+// absolute filesystem path — classification here is just "does this look
+// like a path or a URL", never path arithmetic.
 function rewriteImageSources(root) {
   root.querySelectorAll("img[src]").forEach((img) => {
     const src = img.getAttribute("src");
@@ -663,10 +603,6 @@ els.toc.addEventListener("click", (e) => {
   });
 });
 
-// ---------------------------------------------------------------------
-// Lazy-loaded Mermaid + KaTeX. A tab that never opens either never pays
-// for them; a plain document never triggers the loaders at all.
-// ---------------------------------------------------------------------
 let mermaidLoadPromise = null;
 let katexLoadPromise = null;
 
@@ -699,9 +635,10 @@ function ensureMermaid() {
 }
 
 /// Renders (or, with `restore: true`, re-renders from pristine source —
-/// used on an OS theme flip) every mermaid fence in `tab`. Must only be
-/// called while `tab.contentEl` is visible: mermaid measures text via the
-/// DOM, which returns nothing useful for a `display: none` subtree.
+/// used when the user toggles the theme) every mermaid fence in `tab`.
+/// Must only be called while `tab.contentEl` is visible: mermaid measures
+/// text via the DOM, which returns nothing useful for a `display: none`
+/// subtree.
 async function renderMermaidFor(tab, { restore = false } = {}) {
   await ensureMermaid();
   window.mermaid.initialize(mermaidConfig());
@@ -756,29 +693,15 @@ async function renderMathFor(root) {
   }
 }
 
-// ---------------------------------------------------------------------
-// Edit mode. A tab starts in read-only "view" mode (just the rendered
-// article, as before); Cmd/Ctrl+E — or the toolbar button — switches it
-// to "split" mode: a CodeMirror source pane alongside the same preview
-// article, kept in sync by a debounced re-render through the
-// `render_markdown` command. CodeMirror is vendored
-// (src/vendor/codemirror/) and loaded lazily via the same
-// memoized-promise pattern as Mermaid/KaTeX above, so a pure viewing
-// session never fetches it — see ensureCodeMirror.
-// ---------------------------------------------------------------------
+// CodeMirror is vendored (src/vendor/codemirror/) and loaded lazily via
+// the same memoized-promise pattern as Mermaid/KaTeX above, so a pure
+// viewing session never fetches it — see ensureCodeMirror.
 let codeMirrorLoadPromise = null;
 
-// The generated fence-highlighting theme (build.rs's
-// generate_codemirror_theme_css, class `cm-s-mdreader-syntax`) is a
-// separate stylesheet from the hand-written `cm-s-mdreader` one in
-// styles.css — CodeMirror supports multiple space-separated theme names
-// applied simultaneously (see enterSplitMode's `theme:` value), so the
-// two own disjoint sets of CSS selectors rather than fighting over one.
-// Created lazily inside ensureCodeMirror, not linked statically in
-// index.html like code-theme-*.css — a session that never enters edit
-// mode shouldn't fetch it. Kept as a module-level reference (like
-// els.codeThemeLink) so applyTheme can flip its href on a theme change
-// after edit mode has already been entered once.
+// Kept as a module-level reference (like els.codeThemeLink), created
+// lazily inside ensureCodeMirror, so applyTheme can flip its href on a
+// theme change once edit mode has been entered — see enterSplitMode's
+// `theme:` value for the two-stylesheet split this points at.
 let cmSyntaxThemeLink = null;
 
 function ensureCodeMirror() {
@@ -839,12 +762,10 @@ function ensureCodeMirror() {
 
 const PREVIEW_DEBOUNCE_MS = 200;
 
-/// Sole owner of the 💾 button's visibility: hidden (not merely disabled)
-/// unless the active tab is dirty — a brand-new untitled tab or a freshly
-/// opened file both start clean, so there's nothing to save yet. Uses
-/// `visibility`, not `display` (see the .icon-btn.is-hidden rule in
-/// styles.css), so the buttons after it don't shift horizontally every
-/// time a document's dirty state flips.
+/// Sole owner of the 💾 button's visibility: hidden via `display: none`
+/// (see .icon-btn.is-hidden in styles.css) unless the active tab is
+/// dirty — a brand-new untitled tab or a freshly opened file both start
+/// clean, so there's nothing to save yet.
 function updateSaveButton() {
   const tab = state.tabs[state.activeIndex];
   const show = !!(tab && tab.dirty);
@@ -874,10 +795,8 @@ function updateDocumentTitle() {
   document.title = tab ? `${tab.dirty ? "● " : ""}${tab.title} — mdreader` : "mdreader";
 }
 
-/// Writes the active editor buffer back to disk via the narrow
-/// `save_markdown_file` command (see its doc comment in lib.rs for why
-/// it's a dedicated command rather than tauri-plugin-fs). On failure the
-/// buffer, the dirty flag, and CodeMirror's undo history are all left
+/// Writes the active editor buffer to disk via `save_markdown_file`. On
+/// failure the buffer, dirty flag, and undo history are all left
 /// untouched — a failed save must never look like a successful one.
 ///
 /// Returns whether `tab` is clean once this settles — the tab-close and
@@ -910,11 +829,8 @@ async function saveTab(tab) {
 }
 
 /// The save path for a tab that's never been saved before (`tab.path ===
-/// null`): asks the OS for a filename and location via the native save
-/// dialog, then hands the result to `save_markdown_file_as`, which is what
-/// actually appends a `.md` extension if the user typed a bare name (path
-/// resolution stays in Rust — see CLAUDE.md). On success the tab becomes
-/// an ordinary path-backed tab, same as one opened from disk.
+/// null`). `save_markdown_file_as` appends a `.md` extension if the user
+/// typed a bare name — path resolution stays in Rust, see CLAUDE.md.
 async function saveTabAs(tab) {
   if (tab.saving) return false;
   tab.saving = true;
@@ -924,7 +840,7 @@ async function saveTabAs(tab) {
       defaultPath: `${tab.title}.md`,
       filters: [{ name: "Markdown", extensions: [...markdownExtensions] }],
     });
-    if (!picked) return false; // user cancelled the picker
+    if (!picked) return false;
 
     // Refuse rather than silently shadowing or closing the other tab —
     // there's no data-loss-free way to resolve two tabs claiming the same
@@ -962,19 +878,6 @@ async function saveTabAs(tab) {
   }
 }
 
-/// Wrap (or, on a second call, unwrap) the editor's current selection in
-/// `marker` — the logic behind the Bold/Italic/Strikethrough toolbar
-/// buttons and their keyboard shortcuts. `marker` must be symmetric (same
-/// string on both sides, e.g. "**"/"*"/"~~") — every markdown inline
-/// style this app exposes is symmetric, so there's no need for a
-/// separate open/close-marker code path.
-///
-/// Toggle-aware like a word processor's Bold button: clicking it again on
-/// already-bold text un-bolds rather than double-wrapping. Two ways a
-/// selection can "already be bold" — the selection itself includes the
-/// markers (user dragged across "**bold**"), or the markers sit just
-/// outside the selection (user selected only "bold", markers untouched)
-/// — both are checked before falling through to wrap.
 /// Where a position ends up after `text` (which may itself contain
 /// newlines — a multi-line selection stays multi-line when re-inserted)
 /// is typed starting at `start`. Threading every reselection through this
@@ -987,13 +890,22 @@ function posAfterText(start, text) {
   return { line: start.line + lines.length - 1, ch: lines[lines.length - 1].length };
 }
 
+/// Wrap (or, on a second call, unwrap) the editor's current selection in
+/// `marker` — the logic behind the Bold/Italic/Strikethrough toolbar
+/// buttons and their keyboard shortcuts. `marker` must be symmetric (same
+/// string on both sides, e.g. "**"/"*"/"~~").
+///
+/// Toggle-aware like a word processor's Bold button: clicking it again on
+/// already-bold text un-bolds rather than double-wrapping. Two ways a
+/// selection can "already be bold" — the selection itself includes the
+/// markers, or the markers sit just outside the selection — both are
+/// checked before falling through to wrap.
 function wrapSelection(cm, marker) {
   const from = cm.getCursor("from");
   const to = cm.getCursor("to");
   const selected = cm.getRange(from, to);
   const mlen = marker.length;
 
-  // Case 1: the selection itself already includes the markers.
   if (selected.length >= mlen * 2 && selected.startsWith(marker) && selected.endsWith(marker)) {
     const inner = selected.slice(mlen, selected.length - mlen);
     cm.replaceRange(inner, from, to);
@@ -1021,11 +933,7 @@ function wrapSelection(cm, marker) {
     return;
   }
 
-  // Case 3: wrap. An empty selection (bare cursor) ends up with the
-  // cursor placed between the two markers, ready to type; a real
-  // selection is re-selected (not the markers) so a second click on the
-  // same text hits case 1 and toggles it back off. Each new position is
-  // computed from the previous one via posAfterText, not by adding
+  // Each new position is computed via posAfterText, not by adding
   // lengths to `from`/`to` directly — correct even when `selected` spans
   // multiple lines, where a flat `to.ch + mlen` would land on the wrong
   // line entirely.
@@ -1040,21 +948,18 @@ function wrapSelection(cm, marker) {
 }
 
 /// Toggles a per-line prefix (blockquote `>`, the three list types) across
-/// every line the selection touches — the "wrap" family only applies to a
-/// character span, this applies to whole lines. If every touched line
-/// already matches `testRe`, strips it from all of them; otherwise adds
-/// `makePrefix(n)` (1-based position within the selection, for numbered
-/// lists' sequential renumbering) to every line that doesn't already have
-/// it — a mixed-state selection resolves to "add," matching how most
-/// editors treat an inconsistent selection. Wrapped in `cm.operation` so a
-/// multi-line toggle is one undo step, not one per line (verified real API
-/// — lib/codemirror.js:8678).
+/// every line the selection touches. If every touched line already
+/// matches `testRe`, strips it from all of them; otherwise adds
+/// `makePrefix(n)` (1-based, for numbered lists' sequential renumbering)
+/// to every line that doesn't already have it — a mixed-state selection
+/// resolves to "add." Wrapped in `cm.operation` so a multi-line toggle is
+/// one undo step, not one per line.
 ///
 /// `stripOtherListMarkers`: bullet/numbered/task are mutually exclusive as
 /// a line's list-marker type — clicking Numbered List on an existing
-/// bullet-list line must convert it (`1. text`), not stack
-/// (`1. - text`). Blockquote doesn't pass this — `> - item` is valid,
-/// a blockquote can legitimately contain a list.
+/// bullet-list line must convert it, not stack. Blockquote doesn't pass
+/// this — `> - item` is valid, a blockquote can legitimately contain a
+/// list.
 const LIST_PREFIX_RE = /^([-*+]\s+(\[[ xX]\]\s+)?|\d+[.)]\s+)/;
 
 function toggleLinePrefix(cm, testRe, makePrefix, { stripOtherListMarkers = false } = {}) {
@@ -1083,12 +988,8 @@ function toggleLinePrefix(cm, testRe, makePrefix, { stripOtherListMarkers = fals
 }
 
 /// Sets the current line's ATX heading level (0 = plain paragraph).
-/// Selection's first line only — a heading is inherently single-line
-/// (CommonMark's ATX syntax is one #-prefixed line), so a multi-line
-/// selection heading-ifying every line isn't the expected behavior.
-/// Shared by the toolbar's cycling H button (cycleHeading, below) and the
-/// Cmd/Ctrl+1..6 / +0 shortcuts (EDITOR_SHORTCUTS), which need to jump
-/// straight to a level rather than step through it.
+/// Selection's first line only — a heading is inherently single-line, so
+/// heading-ifying every line of a multi-line selection isn't expected.
 function setHeading(cm, level) {
   const line = cm.getCursor("from").line;
   const text = cm.getLine(line);
@@ -1100,8 +1001,6 @@ function setHeading(cm, level) {
   cm.focus();
 }
 
-/// Cycles the current line through ATX heading levels: # -> ## -> ... ->
-/// ###### -> (none) -> # -> ...
 function cycleHeading(cm) {
   const match = cm.getLine(cm.getCursor("from").line).match(/^(#{1,6})\s+/);
   const level = match ? match[1].length : 0;
@@ -1113,9 +1012,6 @@ function cycleHeading(cm) {
 /// the part of the template most likely to be edited next.
 /// `withSelection`/`withoutSelection` return `{ text, selStart, selEnd }`
 /// — offsets into `text` for the sub-range to select afterward.
-/// `posAfterText` (not flat `ch + length`) is what makes the resulting
-/// selection correct even though these templates are always single-line
-/// today — same helper `wrapSelection` already relies on.
 function insertTemplate(cm, { withSelection, withoutSelection }) {
   const from = cm.getCursor("from");
   const to = cm.getCursor("to");
@@ -1131,9 +1027,6 @@ function insertTemplate(cm, { withSelection, withoutSelection }) {
 
 function insertLink(cm) {
   insertTemplate(cm, {
-    // Selection present -> it becomes the link text, next thing to fill
-    // in is the URL. No selection -> insert a full placeholder template,
-    // but select "text" first (you'd name the link before its target).
     withSelection: (sel) => {
       const text = `[${sel}](url)`;
       return { text, selStart: text.length - 4, selEnd: text.length - 1 };
@@ -1166,8 +1059,7 @@ function insertHorizontalRule(cm) {
 
 /// Same blank-line reasoning as insertHorizontalRule — an un-padded table
 /// can get absorbed as paragraph continuation text instead of parsed as a
-/// table. No guided tab-between-cells editing; that's a materially bigger
-/// feature. Cursor lands at the start of "Header 1" to type over it.
+/// table. Cursor lands at the start of "Header 1" to type over it.
 function insertTable(cm) {
   const from = cm.getCursor("from");
   const to = cm.getCursor("to");
@@ -1179,16 +1071,12 @@ function insertTable(cm) {
 }
 
 /// Inserts a footnote reference `[^n]` at the cursor and its matching
-/// definition `[^n]: ` appended at the document's end, as one atomic
-/// `cm.operation` — the only control here that touches two different
-/// positions in the document in a single click. `n` is chosen by scanning
-/// existing `[^n]:` *definition* lines (not references, which could
-/// legitimately reuse a number) and taking max + 1. Cursor ends up at the
-/// new definition, ready to type its text — matches how other markdown
-/// editors' footnote buttons behave. `lastLine()`/`getLine()` are read
-/// *after* the reference insert, inside the same operation, so they
-/// reflect the document's current state rather than a stale snapshot —
-/// correct even if the cursor was already on the document's last line.
+/// definition `[^n]: ` at the document's end, as one atomic `cm.operation`.
+/// `n` is scanned from existing `[^n]:` *definition* lines (not
+/// references, which could legitimately reuse a number), taking max + 1.
+/// `lastLine()`/`getLine()` are read *after* the reference insert, inside
+/// the same operation, so they reflect the document's current state
+/// rather than a stale snapshot.
 function insertFootnote(cm) {
   const doc = cm.getValue();
   const nums = [...doc.matchAll(/^\[\^(\d+)\]:/gm)].map((m) => parseInt(m[1], 10));
@@ -1225,13 +1113,9 @@ function editorKeyName(key, shift = false) {
   return `${shift ? "Shift-" : ""}${mac ? "Cmd-" : "Ctrl-"}${key}`;
 }
 
-/// Cmd/Ctrl shortcuts available while the editor has focus (extraKeys —
-/// a view-only tab never sees these). Every entry reuses an action
-/// function the toolbar already calls below, which is what keeps the
-/// constraint "only real Markdown syntax render.rs renders" automatic —
-/// nothing here can produce output the toolbar couldn't already produce.
-/// Deliberately no underline binding, same reason as the toolbar: no
-/// Markdown syntax for it (see CLAUDE.md).
+/// Cmd/Ctrl shortcuts available while the editor has focus. Deliberately
+/// no underline binding, same reason as the toolbar: no Markdown syntax
+/// for it (see CLAUDE.md).
 const EDITOR_SHORTCUTS = [
   { key: "B", action: (cm) => wrapSelection(cm, "**") },
   { key: "I", action: (cm) => wrapSelection(cm, "*") },
@@ -1251,14 +1135,6 @@ function editorExtraKeys() {
   return map;
 }
 
-/// Three groups, rendered with a divider between them (see
-/// createEditorToolbar): inline styles, line-level block markers, and
-/// template insertions. Every control here is real syntax this app's own
-/// render.rs enables — nothing aspirational. Deliberately excluded:
-/// Underline (Markdown has no native syntax for it — see CLAUDE.md).
-/// Glyphs follow this app's existing icon convention (plain Unicode/short
-/// text, no icon font or SVG dependency, matching the ✎/💾/☀/☾ buttons
-/// elsewhere in the chrome).
 const TOOLBAR_GROUPS = [
   [
     { label: "B", title: "Bold (Cmd/Ctrl+B)", style: "font-weight:700", action: (cm) => wrapSelection(cm, "**") },
@@ -1304,15 +1180,10 @@ const TOOLBAR_GROUPS = [
   ],
 ];
 
-/// Builds the formatting toolbar for `tab`'s editor pane. Must be called
-/// (and its result appended into editorPane) *before* `new CodeMirror(...)`
-/// — CodeMirror's constructor appends its own wrapper to whatever's
-/// already in the container rather than replacing it (verified against
-/// lib/codemirror.js's Display constructor), so toolbar-first in the DOM
-/// plus a flex-column .editor-pane is what puts it visually on top.
-/// No separate show/hide wiring needed: as a child of editorPane, it's
-/// already gated by the same `.tab-pane.split .editor-pane` display rule
-/// CodeMirror itself is.
+/// Builds the formatting toolbar for `tab`'s editor pane. Must be
+/// appended into editorPane *before* `new CodeMirror(...)` — CodeMirror's
+/// constructor appends its own wrapper rather than replacing container
+/// contents, so toolbar-first in the DOM is what puts it visually on top.
 function createEditorToolbar(tab) {
   const bar = document.createElement("div");
   bar.className = "editor-toolbar";
@@ -1336,13 +1207,6 @@ function createEditorToolbar(tab) {
   return bar;
 }
 
-/// Create (once) the CodeMirror instance and editor-pane/splitter DOM for
-/// `tab`, fetch its source lazily if this is the first time it's been
-/// edited, and switch the tab into split mode. Safe to call on a tab
-/// already in split mode. The splitter is drag-resizable — see
-/// attachSplitterDrag — with the pane widths driven by the --split-ratio
-/// custom property (styles.css) so this function only ever has to set
-/// one number.
 async function enterSplitMode(tab) {
   if (tab.mode === "split") return;
 
@@ -1380,10 +1244,8 @@ async function enterSplitMode(tab) {
     editorPane.appendChild(toolbar);
     const splitter = document.createElement("div");
     splitter.className = "pane-splitter";
-    // Semantics for assistive tech; there is deliberately no tabindex or
-    // keyboard resize here — arrow-key resize would need its own keydown
-    // handler and tab-order slot, a bigger decision than "make the drag
-    // work."
+    // Deliberately no tabindex or keyboard resize here — a bigger
+    // decision than "make the drag work."
     splitter.setAttribute("role", "separator");
     splitter.setAttribute("aria-orientation", "vertical");
     tab.paneEl.insertBefore(editorPane, tab.previewEl);
@@ -1402,21 +1264,11 @@ async function enterSplitMode(tab) {
       tab.editor = new window.CodeMirror(editorPane, {
         value: tab.source,
         mode: "gfm",
-        // Two theme names, space-separated — CodeMirror applies both
-        // simultaneously as separate cm-s-* classes (verified against
-        // lib/codemirror.js's theme option handler). "mdreader" (in
-        // styles.css) owns chrome: background, base text, gutters,
-        // cursor. "mdreader-syntax" (generated by build.rs from the same
-        // syntect theme the preview pane uses) owns only code-token
-        // colors. Disjoint selector sets, no precedence fights.
         theme: "mdreader mdreader-syntax",
         lineWrapping: true,
         lineNumbers: true,
-        // See EDITOR_SHORTCUTS/editorKeyName above for why this can't be
-        // a hand-written "Mod-B"-style literal. These only fire while the
-        // editor itself has focus, unlike the app's global keydown
-        // handler, so they can't collide with Cmd/Ctrl+F or +W firing
-        // from the find input or elsewhere.
+        // These only fire while the editor has focus, so they can't
+        // collide with the global keydown handler's own Cmd/Ctrl+F, +W.
         extraKeys: editorExtraKeys(),
       });
     } catch (err) {
@@ -1441,17 +1293,11 @@ async function enterSplitMode(tab) {
 }
 
 /// Drag-to-resize for the editor/preview divider. Pointer events (not
-/// mouse events) for two concrete reasons: setPointerCapture routes every
-/// subsequent move/up straight to the splitter itself, so there's no
-/// document-level listener to add and remove and no "button released
-/// outside the window, drag never ended" state to clean up; and one code
-/// path covers mouse, trackpad, touch and pen across all three OSes
-/// instead of a mouse-only one. The visible affordance is the OS's own
-/// col-resize cursor (styles.css) — no handle graphic, no button.
-///
-/// Attached once, when the splitter is first created (enterSplitMode),
-/// and never torn down — same "create once, keep alive" lifetime as the
-/// splitter element itself and tab.editorEl.
+/// mouse events): setPointerCapture routes every subsequent move/up
+/// straight to the splitter itself, so there's no document-level
+/// listener to add/remove and no "button released outside the window"
+/// state to clean up, and one code path covers mouse, trackpad, touch,
+/// and pen.
 function attachSplitterDrag(tab, splitter) {
   let rafId = 0;
 
@@ -1464,7 +1310,7 @@ function attachSplitterDrag(tab, splitter) {
     // overflow-x) needs a real minimum to stay usable.
     const min = SPLIT_MIN_PANE_PX;
     const max = rect.width - SPLIT_MIN_PANE_PX;
-    if (max <= min) return; // window too narrow to split at all right now
+    if (max <= min) return;
     const x = Math.min(Math.max(clientX - rect.left, min), max);
     setSplitRatio((x / rect.width) * 100);
   };
@@ -1484,10 +1330,10 @@ function attachSplitterDrag(tab, splitter) {
   };
 
   splitter.addEventListener("pointerdown", (e) => {
-    if (e.button !== 0) return; // ignore right/middle click
-    e.preventDefault(); // no text-selection drag
+    if (e.button !== 0) return;
+    e.preventDefault();
     splitter.setPointerCapture(e.pointerId);
-    splitter.classList.add("dragging"); // rule already exists, styles.css
+    splitter.classList.add("dragging");
     document.body.classList.add("is-splitting");
   });
 
@@ -1521,8 +1367,6 @@ function attachSplitterDrag(tab, splitter) {
   splitter.addEventListener("pointerup", endDrag);
   splitter.addEventListener("pointercancel", endDrag);
 
-  // Double-click resets to an even split — the standard convention for a
-  // split sash, and the reason this needs no separate reset button.
   splitter.addEventListener("dblclick", () => {
     setSplitRatio(SPLIT_RATIO_DEFAULT);
     localStorage.setItem(SPLIT_RATIO_KEY, String(SPLIT_RATIO_DEFAULT));
@@ -1554,7 +1398,6 @@ async function toggleEditMode() {
   }
 }
 
-/// Debounced re-render of `tab`'s preview from its live editor buffer.
 function schedulePreview(tab) {
   clearTimeout(tab.previewTimer);
   tab.previewTimer = setTimeout(() => runPreview(tab), PREVIEW_DEBOUNCE_MS);
@@ -1579,7 +1422,7 @@ async function runPreview(tab) {
   try {
     const source = tab.editor.getValue();
     const doc = await tauri.core.invoke("render_markdown", { source, basePath: tab.path });
-    if (seq !== tab.previewSeq) return; // superseded by a later edit
+    if (seq !== tab.previewSeq) return;
 
     tab.headings = doc.headings;
     tab.hasMermaid = doc.has_mermaid;
@@ -1590,12 +1433,9 @@ async function runPreview(tab) {
     const isActive = state.tabs[state.activeIndex] === tab;
     if (isActive) updateToc(tab);
 
-    // Mermaid/KaTeX measure text via the DOM and must not run against a
-    // hidden subtree — the same rule the original "render exactly once,
-    // on first visibility" invariant exists for, just re-checked on
-    // every settle instead of once. If the tab isn't visible right now,
-    // skip and let activateTab's previewNeedsEnrich check catch it on
-    // the next activation instead of running against display:none.
+    // Mermaid/KaTeX must not run against a hidden subtree — if the tab
+    // isn't visible, skip and let activateTab's previewNeedsEnrich check
+    // catch it on the next activation instead.
     if (isActive) {
       if (tab.hasMermaid) await renderMermaidFor(tab);
       if (tab.hasMath) await renderMathFor(tab.contentEl);
@@ -1611,11 +1451,8 @@ async function runPreview(tab) {
   }
 }
 
-// ---------------------------------------------------------------------
-// In-page find (Ctrl/Cmd+F). The webview doesn't expose a scriptable
-// native find, so this walks the active tab's text nodes and wraps
-// matches in <mark>.
-// ---------------------------------------------------------------------
+// The webview exposes no scriptable native find, so this walks the
+// active tab's text nodes and wraps matches in <mark>.
 function activeRoot() {
   return state.tabs[state.activeIndex]?.contentEl ?? null;
 }
@@ -1738,12 +1575,10 @@ function debounce(fn, ms) {
 let modalOpen = false;
 let modalResolve = null;
 
-/// Shows the shared unsaved-changes modal for `tab` and resolves once the
-/// user picks "save" | "dont-save" | "cancel" — via a button, Enter
-/// (save), Escape (cancel), or a backdrop click (cancel). `modalOpen` is
-/// checked by the global keydown handler and the menu-action dispatcher
-/// so neither keyboard shortcuts nor menu items reach through the
-/// backdrop while this is up.
+/// Shows the shared unsaved-changes modal for `tab`, resolving once the
+/// user picks "save" | "dont-save" | "cancel". `modalOpen` is checked by
+/// the global keydown handler and the menu-action dispatcher so neither
+/// reaches through the backdrop while this is up.
 function confirmUnsaved(tab) {
   return new Promise((resolve) => {
     const previouslyFocused = document.activeElement;
@@ -1763,17 +1598,12 @@ function confirmUnsaved(tab) {
 
 let quitting = false;
 
-/// Quitting is closing every tab at once, with the twist that a Cancel
-/// anywhere must abort the *whole* quit rather than leaving some tabs
-/// closed and others not — so, unlike closeTab, nothing is actually
-/// spliced out of state.tabs until every dirty tab has been resolved; the
-/// process just exits once they have been (quit_app == AppHandle::exit,
-/// which never re-enters the CloseRequested handler that led here — see
-/// lib.rs). Snapshotting state.tabs and re-resolving each tab's index by
-/// identity on every iteration (never carrying an index across an await)
-/// guards against the same "the tab bar changed while we were awaiting a
-/// dialog" hazard closeTab already documents — here the await window is a
-/// whole loop of modals and native save dialogs, not just one.
+/// Quitting closes every tab at once; a Cancel anywhere aborts the
+/// *whole* quit, so — unlike closeTab — nothing is spliced out of
+/// state.tabs until every dirty tab has been resolved. Re-resolving each
+/// tab's index by identity on every iteration guards against the same
+/// "the tab bar changed while awaiting a dialog" hazard closeTab
+/// documents, here across a whole loop of modals and save dialogs.
 async function requestQuit() {
   if (quitting || modalOpen) return;
   quitting = true;
@@ -1789,7 +1619,7 @@ async function requestQuit() {
         return;
       }
       if (choice === "save" && !(await saveTab(tab))) {
-        return; // failed write or a cancelled save-as picker — abort the quit
+        return;
       }
     }
     await tauri.core.invoke("quit_app");
@@ -1800,9 +1630,6 @@ async function requestQuit() {
   }
 }
 
-// ---------------------------------------------------------------------
-// Wiring
-// ---------------------------------------------------------------------
 function wireStaticUI() {
   els.findInput.addEventListener("input", debounce((e) => runFind(e.target.value), 120));
   els.findInput.addEventListener("keydown", (e) => {
@@ -1818,9 +1645,6 @@ function wireStaticUI() {
   els.findNext.addEventListener("click", () => stepMatch(1));
   els.findClose.addEventListener("click", closeFind);
 
-  // Wired once here rather than per-call in confirmUnsaved — the modal's
-  // three buttons never change identity, only whether modalResolve is
-  // currently set (i.e. a modal is actually open).
   els.modalSave.addEventListener("click", () => modalResolve?.("save"));
   els.modalDontSave.addEventListener("click", () => modalResolve?.("dont-save"));
   els.modalCancel.addEventListener("click", () => modalResolve?.("cancel"));
@@ -1888,18 +1712,15 @@ async function wireDragDrop() {
       els.dropOverlay.classList.remove("visible");
     } else if (type === "drop") {
       els.dropOverlay.classList.remove("visible");
-      // Same extension filter the open dialog applies (openFileDialog);
-      // anything else dropped is ignored rather than handed to
-      // open_markdown_file, which would refuse it Rust-side anyway.
       openPaths((event.payload.paths || []).filter((p) => markdownExtensions.has(extOf(p))));
     }
   });
 }
 
-/// Dispatches a native menu click (see src-tauri/src/menu.rs) to the same
-/// actions their toolbar-button/keyboard equivalents use. Guarded the same
-/// way as the global keydown handler: a native menu press isn't blocked
-/// by the modal's DOM backdrop at all, so it needs its own check.
+/// Dispatches a native menu click (src-tauri/src/menu.rs) to the same
+/// actions their toolbar/keyboard equivalents use. Guarded like the
+/// global keydown handler: a native menu press isn't blocked by the
+/// modal's DOM backdrop at all.
 function handleMenuAction(id) {
   if (modalOpen) return;
   switch (id) {
@@ -1935,9 +1756,7 @@ async function init() {
   await tauri.event.listen("files-pending", () => drainAndOpen());
   await tauri.event.listen("menu-action", ({ payload }) => handleMenuAction(payload));
   // Rust's CloseRequested handler prevents the close and emits this
-  // instead of letting the window close outright — see lib.rs's
-  // on_window_event. requestQuit runs the same per-tab unsaved-changes
-  // sequence as the quit menu item, then calls quit_app itself.
+  // instead — see lib.rs's on_window_event.
   await tauri.event.listen("close-requested", () => requestQuit());
 
   // Only after both listeners above are registered: emitting

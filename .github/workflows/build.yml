@@ -1,17 +1,21 @@
 name: Build
 
-# CI build only — no GitHub Release is created. Produces per-platform
-# installers as downloadable workflow artifacts — whichever formats
-# tauri.conf.json's bundle.targets:"all" yields on each OS (macOS: a
-# universal .dmg; Windows: NSIS .exe and MSI; Linux: .deb/.rpm, plus
-# AppImage if the runner has the tools for it) — driven by the same
+# Produces per-platform installers as downloadable workflow artifacts —
+# whichever formats tauri.conf.json's bundle.targets:"all" yields on each
+# OS (macOS: a universal .dmg; Windows: NSIS .exe and MSI; Linux: .deb/.rpm,
+# plus AppImage if the runner has the tools for it) — driven by the same
 # bundle.fileAssociations config used everywhere else (see
 # src-tauri/tauri.conf.json and CLAUDE.md). Each artifact is staged flat
 # (see the "Stage installer(s)" step) so downloading and unzipping it
 # hands you the installer directly, not a folder tree to click through.
+#
+# Pushing a `v*` tag additionally runs the `release` job, which collects
+# every platform's staged installers and checksums into a GitHub Release —
+# see that job for why this is separate from the artifact upload above.
 on:
   push:
     branches: [main, master]
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
@@ -125,6 +129,7 @@ jobs:
         run: |
           mkdir -p dist
           find src-tauri/target -path '*/bundle/macos' -prune -o -path '*/bundle/*' -type f -exec cp {} dist/ \;
+          ( cd dist && shasum -a 256 * > SHA256SUMS-${{ matrix.name }}.txt )
           ls -la dist
 
       - name: Upload installer
@@ -133,3 +138,48 @@ jobs:
           name: mdreader-${{ matrix.name }}
           path: dist/*
           if-no-files-found: error
+
+  # Only runs on a `v*` tag push (see the `on:` trigger above). Collects
+  # every platform's staged installers + SHA256SUMS from the `build` job
+  # into one GitHub Release. Kept as a separate job (not folded into
+  # `build`) because it needs all three platforms' artifacts downloaded
+  # together before it can publish — `build`'s own upload-artifact step
+  # above is unconditional and keeps working the same for ordinary
+  # branch/PR pushes, which never reach this job at all.
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download all platform installers
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Flatten into one release directory
+        run: |
+          mkdir -p release
+          find artifacts -type f -exec mv {} release/ \;
+          ls -la release
+
+      # Public-repo only: produces a verifiable provenance attestation for
+      # every installer (`gh attestation verify`). This repo is private
+      # today, and GitHub's attestation API rejects private-repo requests —
+      # continue-on-error keeps that failure from blocking the Release
+      # publish below. Drop continue-on-error once the repo goes public
+      # (Tier 1 in the trust-hardening plan).
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        continue-on-error: true
+        with:
+          subject-path: 'release/*'
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true

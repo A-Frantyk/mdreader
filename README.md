@@ -12,6 +12,34 @@ in mdreader — no editor, no project to load, just the rendered document.
 - Light / Dark theme
 - Registers as a `.md`/`.markdown`/`.mdown`/`.mkd` handler on all three OSes
 
+## Download & install
+
+Grab the latest installer for your OS from the
+[Releases page](https://github.com/A-Frantyk/mdreader/releases), along with
+its `SHA256SUMS-*.txt`. Verify before installing if you like:
+
+```bash
+# macOS / Linux
+shasum -a 256 -c SHA256SUMS-macos.txt   # or -linux.txt
+
+# Windows (PowerShell)
+Get-FileHash .\mdreader_*_x64-setup.exe -Algorithm SHA256
+```
+
+This is a hobby project with no code-signing budget, so both OSes will
+warn on first run — the source and CI build logs are public/inspectable,
+but neither install is backed by a paid trust certificate:
+
+- **macOS** — the app is ad-hoc signed, not notarized, so Gatekeeper shows
+  "cannot be opened because the developer cannot be verified." Right-click
+  the app → **Open** (or System Settings → Privacy & Security → **Open
+  Anyway**) once, and it launches normally after. If macOS instead calls it
+  "damaged," it usually means quarantine wasn't cleared by the click above;
+  run `xattr -dr com.apple.quarantine /Applications/mdreader.app` once.
+- **Windows** — SmartScreen shows "Windows protected your PC" because the
+  installer isn't signed by a paid CA certificate. Click **More info** →
+  **Run anyway**.
+
 ## Why it's fast
 
 Markdown is parsed and rendered to HTML in **Rust**, not JavaScript — the
@@ -136,8 +164,10 @@ npm run tauri build
 Each platform's installer has to be built *on* that platform — Tauri
 doesn't cross-compile installers. `.github/workflows/build.yml` does this
 in CI: on every push/PR (or manually via "Run workflow"), it builds all
-three in parallel and uploads each as a downloadable Actions artifact —
-no GitHub Release is created, it's build-only.
+three in parallel and uploads each as a downloadable Actions artifact.
+Pushing a `v*` tag additionally publishes a GitHub Release with all three
+installers and their `SHA256SUMS-*.txt` — see
+[Download & install](#download--install) above.
 
 Produces a native installer under `src-tauri/target/release/bundle/`:
 
@@ -148,8 +178,12 @@ Produces a native installer under `src-tauri/target/release/bundle/`:
   user click after install.
 - **macOS** — a `.app` bundle (and `.dmg`). Move it to `/Applications` and
   launch it once to register with Launch Services; Finder's "Open With"
-  will then list it. Unsigned builds need a right-click → Open on first
-  launch to pass Gatekeeper.
+  will then list it. The bundle is ad-hoc signed
+  (`bundle.macOS.signingIdentity: "-"` in `tauri.conf.json` — required so
+  the universal `lipo` step doesn't leave the binary's signature broken,
+  which macOS treats as "damaged" rather than just "unidentified") but not
+  notarized, so it still needs a right-click → Open on first launch to
+  pass Gatekeeper.
 - **Linux** — `.deb` and `.rpm`, each shipping a `.desktop` file with
   `MimeType=text/markdown`. Install via the system package manager so
   `update-desktop-database` runs and the file manager picks it up.

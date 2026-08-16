@@ -28,6 +28,18 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "publisher": "Andrii Frantyk",
+    "copyright": "Copyright © 2026 Andrii Frantyk",
+    "homepage": "https://github.com/A-Frantyk/mdreader",
+    "category": "Productivity",
+    "shortDescription": "Lightweight Markdown viewer and editor",
+    "longDescription": "A fast, cross-platform desktop Markdown viewer and editor with live preview, mermaid diagrams, and math rendering.",
+    "licenseFile": "../LICENSE",
+    "macOS": {
+      "signingIdentity": "-",
+      "hardenedRuntime": false,
+      "minimumSystemVersion": "10.15"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

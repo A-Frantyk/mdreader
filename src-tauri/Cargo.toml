@@ -1,8 +1,11 @@
 [package]
 name = "mdreader"
 version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+description = "Lightweight cross-platform desktop Markdown viewer and editor"
+authors = ["Andrii Frantyk <ifrantya@gmail.com>"]
+license = "MIT"
+homepage = "https://github.com/A-Frantyk/mdreader"
+repository = "https://github.com/A-Frantyk/mdreader"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

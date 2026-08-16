@@ -210,9 +210,27 @@ instead of launching your new one.
   MIME handling, WebKitGTK rendering quirks — see the "Known risks"
   history in past planning) are implemented per Tauri's documented
   behavior but not yet verified on real Windows/Linux machines.
-- Builds are unsigned. macOS Gatekeeper needs a right-click → Open on
-  first launch; Windows SmartScreen will warn. No code-signing pipeline
-  exists yet.
+- **macOS builds are ad-hoc signed, not notarized; Windows/Linux builds
+  are unsigned.** `bundle.macOS.signingIdentity: "-"` in
+  `tauri.conf.json` exists specifically because `--target
+  universal-apple-darwin`'s `lipo` step invalidates each arch's implicit
+  ad-hoc signature — without an explicit identity, Tauri skips
+  `codesign` entirely and Apple Silicon refuses to launch the result at
+  all ("app is damaged," not recoverable by right-click → Open). Ad-hoc
+  signing downgrades that to the ordinary "unidentified developer"
+  prompt, which right-click → Open does clear. `hardenedRuntime` is
+  explicitly set to `false` there too (the schema default is `true`) —
+  hardened runtime only pays off once notarized, and without a matching
+  entitlements file it can break the webview's JIT. If an Apple
+  Developer cert is ever bought, notarize, flip `hardenedRuntime` back
+  to `true`, and add an entitlements plist with
+  `com.apple.security.cs.allow-jit`. Windows SmartScreen still warns —
+  no code-signing pipeline exists for Windows, that needs a paid cert
+  or an approved free-for-OSS signer (e.g. SignPath Foundation), neither
+  wired up yet. Releases are tag-driven (`v*` push) via
+  `.github/workflows/build.yml`'s `release` job, and every installer
+  ships a `SHA256SUMS-*.txt` alongside it — see `README.md`'s
+  "Download & install".
 - No auto-update mechanism.
 - "New Document" (`newDocument` in `app.js`) creates an untitled,
   never-saved tab (`tab.path === null` until a successful save); its first

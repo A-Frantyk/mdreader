@@ -401,7 +401,7 @@ pub fn run() {
         ])
         .build(context)
         .expect("error while building tauri application")
-        .run(|app_handle, event| {
+        .run(|_app_handle, _event| {
             // Entry path 2: cold start on macOS — the file path never
             // appears in argv, it arrives as RunEvent::Opened, which
             // (like .setup()) always runs after the window is built. The
@@ -411,12 +411,15 @@ pub fn run() {
             // just a no-op, so this has to be cfg-gated. Desktop-only
             // scope (Windows/Linux/macOS, no iOS/Android), so gate to
             // exactly the one platform that's both in scope and needs it.
+            // Both closure params are unused on non-macOS once this
+            // statement is cfg'd out entirely, hence the leading
+            // underscores — they're still used by name below on macOS.
             #[cfg(target_os = "macos")]
-            if let tauri::RunEvent::Opened { urls } = event {
+            if let tauri::RunEvent::Opened { urls } = _event {
                 let paths = urls.into_iter().filter_map(|url| {
                     (url.scheme() == "file").then(|| url.to_file_path().ok()).flatten()
                 });
-                queue_markdown_args(app_handle, paths);
+                queue_markdown_args(_app_handle, paths);
             }
         });
 }

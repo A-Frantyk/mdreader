@@ -2,10 +2,10 @@ name: Build
 
 # Produces per-platform installers as downloadable workflow artifacts —
 # whichever formats tauri.conf.json's bundle.targets:"all" yields on each
-# OS (macOS: a universal .dmg; Windows: NSIS .exe and MSI; Linux: .deb/.rpm,
-# plus AppImage if the runner has the tools for it) — driven by the same
-# bundle.fileAssociations config used everywhere else (see
-# src-tauri/tauri.conf.json and CLAUDE.md). Each artifact is staged flat
+# OS (macOS: a universal .dmg; Windows: NSIS .exe and MSI; Linux: .deb/.rpm
+# — see the `build` job's Linux matrix leg for why AppImage is excluded)
+# — driven by the same bundle.fileAssociations config used everywhere else
+# (see src-tauri/tauri.conf.json and CLAUDE.md). Each artifact is staged flat
 # (see the "Stage installer(s)" step) so downloading and unzipping it
 # hands you the installer directly, not a folder tree to click through.
 #
@@ -74,7 +74,18 @@ jobs:
             args: '--target universal-apple-darwin'
           - platform: ubuntu-22.04
             name: linux
-            args: ''
+            # deb/rpm only — no AppImage. Two reasons: (1) Tauri's
+            # AppImage bundler downloads five tools at bundle time
+            # (AppRun, linuxdeploy, two plugin scripts, an optional
+            # plugin AppImage) with zero retry logic, which flaked CI
+            # with a transient `io: Peer disconnected` — an unretried
+            # network fetch sitting directly in front of the release job
+            # (release: needs: build). (2) AppImage can't register the
+            # .md file association anyway (no .desktop-file install step
+            # the way deb/rpm packaging gets via update-desktop-database)
+            # — the app's whole premise on Linux. README already tells
+            # Linux users to install via deb/rpm for that reason.
+            args: '--bundles deb rpm'
           - platform: windows-latest
             name: windows
             args: ''
@@ -119,8 +130,9 @@ jobs:
       # release/bundle/<type>/ before you reached the actual installer.
       # Stage every installer *file* Tauri produced (tauri.conf.json's
       # targets:"all" means every format available on the OS, not just
-      # one — Windows gets NSIS+MSI, Linux gets deb/rpm/AppImage) into a
-      # flat directory first, so the artifact zip has no wrapper folders
+      # one — Windows gets NSIS+MSI, Linux gets deb/rpm per the matrix
+      # leg's --bundles override above) into a flat directory first, so
+      # the artifact zip has no wrapper folders
       # at all. bundle/macos/<App>.app is deliberately pruned: it's a
       # directory tree (the raw .app bundle), not a double-clickable
       # installer — the .dmg next to it is.

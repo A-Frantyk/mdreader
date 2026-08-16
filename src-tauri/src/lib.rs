@@ -57,6 +57,23 @@ fn is_markdown_path(state: &AppState, path: &std::path::Path) -> bool {
         .is_some_and(|e| state.markdown_extensions.contains(&e.to_ascii_lowercase()))
 }
 
+/// The Rust-side gate every path-taking command goes through — read
+/// (`open_markdown_file`, `read_markdown_source`) and write
+/// (`save_markdown_file`) alike. The frontend also filters by extension
+/// (open dialog, drop handler, link click), but that's UX, not the
+/// security boundary: this app renders untrusted markdown inside a
+/// webview that has `window.__TAURI__` exposed, so any command that
+/// takes a path must refuse non-markdown targets *here*, where a
+/// compromised page can't skip the check. Keeps `~/.ssh/id_rsa`-style
+/// reads off the table even if the webview is ever subverted.
+fn require_markdown_path(state: &AppState, path: &std::path::Path) -> Result<(), String> {
+    if is_markdown_path(state, path) {
+        Ok(())
+    } else {
+        Err(format!("Not a markdown file: {}", path.display()))
+    }
+}
+
 /// Ensure a save-dialog result ends up with a markdown extension, for the
 /// "create a new document" flow: the OS save dialog lets a user type a
 /// bare name (`notes`) or, on GTK, never appends an extension at all even
@@ -166,8 +183,14 @@ fn drain_pending_files(state: tauri::State<AppState>) -> Vec<String> {
 }
 
 #[tauri::command(async)]
-fn open_markdown_file(app: AppHandle, path: String) -> Result<OpenedDocument, String> {
-    load_document(&app, std::path::Path::new(&path))
+fn open_markdown_file(
+    app: AppHandle,
+    state: tauri::State<AppState>,
+    path: String,
+) -> Result<OpenedDocument, String> {
+    let path = std::path::Path::new(&path);
+    require_markdown_path(&state, path)?;
+    load_document(&app, path)
 }
 
 /// Read a markdown file's raw source, for the editor. Kept separate from
@@ -176,7 +199,8 @@ fn open_markdown_file(app: AppHandle, path: String) -> Result<OpenedDocument, St
 /// nobody reads in view mode would be wasteful. Fetched lazily, once, the
 /// first time a tab enters edit mode.
 #[tauri::command(async)]
-fn read_markdown_source(path: String) -> Result<String, String> {
+fn read_markdown_source(state: tauri::State<AppState>, path: String) -> Result<String, String> {
+    require_markdown_path(&state, std::path::Path::new(&path))?;
     std::fs::read_to_string(&path).map_err(|e| format!("Couldn't read {}: {}", path, e))
 }
 
@@ -240,9 +264,7 @@ fn save_markdown_file(
     contents: String,
 ) -> Result<(), String> {
     let path = std::path::Path::new(&path);
-    if !is_markdown_path(&state, path) {
-        return Err(format!("Refusing to save non-markdown path: {}", path.display()));
-    }
+    require_markdown_path(&state, path)?;
     atomic_write(path, &contents)
 }
 
@@ -431,6 +453,16 @@ mod tests {
         assert!(!is_markdown_path(&state, std::path::Path::new("a.txt")));
         assert!(!is_markdown_path(&state, std::path::Path::new("a")));
         assert!(!is_markdown_path(&state, std::path::Path::new(".zshrc")));
+    }
+
+    #[test]
+    fn require_markdown_path_gates_by_extension() {
+        let state = test_state();
+        assert!(require_markdown_path(&state, std::path::Path::new("/tmp/notes.md")).is_ok());
+        assert!(require_markdown_path(&state, std::path::Path::new("/tmp/notes.MD")).is_ok());
+        for bad in ["/etc/passwd", "/tmp/x.txt", "/tmp/.ssh/id_rsa", "/tmp/a.md.exe", "/tmp/dir.md/file"] {
+            assert!(require_markdown_path(&state, std::path::Path::new(bad)).is_err(), "{bad} accepted");
+        }
     }
 
     #[test]

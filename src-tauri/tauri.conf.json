@@ -14,11 +14,12 @@
         "width": 980,
         "height": 720,
         "minWidth": 480,
-        "minHeight": 320
+        "minHeight": 320,
+        "dragDropEnabled": true
       }
     ],
     "security": {
-      "csp": null,
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost data: https: http:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none'",
       "assetProtocol": {
         "enable": true,
         "scope": []

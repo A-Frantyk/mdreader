@@ -9,6 +9,7 @@
     "opener:allow-open-path",
     "dialog:allow-open",
     "dialog:allow-save",
-    "dialog:allow-message"
+    "dialog:allow-message",
+    "dialog:allow-ask"
   ]
 }

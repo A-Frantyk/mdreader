@@ -131,6 +131,30 @@ Mermaid/KaTeX only ever render once per document, the first time its tab
 is actually shown (both need real layout to measure text, so they can't
 run against a `display: none` element).
 
+## Security model
+
+mdreader treats every document as **untrusted** — a `.md` you downloaded
+should be able to render itself and nothing more.
+
+- All HTML that reaches the webview goes through one sanitizer
+  (`ammonia`, in `render.rs`) after a single `push_html` pass: scripts,
+  event handlers, `javascript:`/`data:`/`file:` URLs, iframes/objects/
+  forms/svg/math, and all inline styles except table `text-align` are
+  stripped. Mermaid runs with `securityLevel: "strict"`, KaTeX with
+  `trust: false`.
+- The webview has a strict Content-Security-Policy (`default-src 'self'`,
+  see `tauri.conf.json`); the only remote requests a document can trigger
+  are `<img>` loads it explicitly references.
+- The Rust side exposes a handful of narrow commands. Every one that
+  takes a path refuses non-Markdown extensions before touching the
+  filesystem, and the only write is an atomic, extension-validated
+  save — no general filesystem plugin.
+- Clicking a link to a non-Markdown local file never runs it silently:
+  executable extensions are refused, and everything else shows a native
+  confirmation with the resolved absolute path.
+
+Found something? See [SECURITY.md](SECURITY.md) for private reporting.
+
 ## Prerequisites
 
 - [Rust](https://rustup.rs/) (stable toolchain)

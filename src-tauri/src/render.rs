@@ -363,9 +363,17 @@ fn sanitize(html: &str) -> String {
         // pulldown-cmark's own GFM table-alignment output — its only
         // source of `style` in our HTML. Mermaid/KaTeX render
         // client-side and never pass through this sanitizer, so `style`
-        // is intentionally not allowed anywhere else.
+        // is intentionally not allowed anywhere else — and even on
+        // td/th the *value* is filtered to `text-align` alone. Without
+        // `filter_style_properties`, ammonia passes the declaration
+        // block through verbatim (`style_properties: None` is its
+        // default), so raw `<td style="position:fixed;inset:0;
+        // background:url(https://…)">` in a document would paint over
+        // the whole window and beacon out. Only ever widen this list
+        // for a property pulldown-cmark itself emits.
         .add_tag_attributes("td", ["style"])
         .add_tag_attributes("th", ["style"])
+        .filter_style_properties(["text-align"].into_iter().collect())
         .link_rel(Some("noopener noreferrer"))
         .clean(html)
         .to_string()
@@ -415,8 +423,11 @@ mod tests {
     fn gfm_tables_render_body_cells_and_alignment() {
         let doc = r("| a | b |\n|:---|---:|\n| 1 | 2 |\n| 3 | 4 |");
         assert!(doc.html.contains("<td"));
-        assert!(doc.html.contains("text-align: left"));
-        assert!(doc.html.contains("text-align: right"));
+        // ammonia's style filter re-serializes declarations without the
+        // space pulldown-cmark emits (`text-align:left`), so match on the
+        // property/value pair rather than exact whitespace.
+        assert!(doc.html.replace(' ', "").contains("text-align:left"), "{}", doc.html);
+        assert!(doc.html.replace(' ', "").contains("text-align:right"), "{}", doc.html);
         // Only the header row's 2 cells should be <th> ("<thead>" also
         // matches the "<th" substring, so exclude it explicitly).
         let th_cells = doc.html.matches("<th").count() - doc.html.matches("<thead").count();
@@ -479,6 +490,54 @@ mod tests {
     }
 
     #[test]
+    fn style_on_table_cells_is_filtered_to_text_align() {
+        // Raw HTML cell with a hostile style block plus a legitimate
+        // alignment: only text-align may survive.
+        let doc = r("<table><tr><td style=\"position:fixed;inset:0;text-align:center;background:url(https://evil/px)\">a</td></tr></table>");
+        assert!(doc.html.contains("text-align"), "{}", doc.html);
+        assert!(!doc.html.contains("position"), "{}", doc.html);
+        assert!(!doc.html.contains("background"), "{}", doc.html);
+        assert!(!doc.html.contains("evil"), "{}", doc.html);
+        // GFM alignment (pulldown-cmark's own style output) still works.
+        let doc = r("| a | b |\n|:--|--:|\n| 1 | 2 |");
+        assert!(doc.html.replace(' ', "").contains("text-align:left"), "{}", doc.html);
+        // style is not allowed on any other tag at all.
+        let doc = r("<div style=\"text-align:center\">x</div>");
+        assert!(!doc.html.contains("style="), "{}", doc.html);
+    }
+
+    #[test]
+    fn strips_dangerous_url_schemes() {
+        let doc = r("[a](data:text/html;base64,PHNjcmlwdD4=)\n\n[b](file:///etc/passwd)\n\n[c](vbscript:msgbox)\n\n![d](data:image/svg+xml;base64,PHN2Zz4=)\n\n<a href=\"jAvAsCrIpT:alert(1)\">e</a>\n\n<img src=\"data:image/png;base64,AAAA\">");
+        for needle in ["data:", "file:", "vbscript:", "javascript:", "jAvAsCrIpT:", "passwd", "msgbox"] {
+            assert!(!doc.html.contains(needle), "{needle} survived: {}", doc.html);
+        }
+        // Ordinary web links are untouched.
+        let doc = r("[ok](https://example.com/x)");
+        assert!(doc.html.contains("href=\"https://example.com/x\""));
+    }
+
+    #[test]
+    fn strips_embedding_form_and_meta_tags() {
+        let doc = r("<iframe srcdoc=\"<script>1</script>\"></iframe>\n<object data=x></object>\n<embed src=x>\n<form action=x><button formaction=y>b</button></form>\n<svg onload=alert(1)><a xlink:href=\"javascript:1\">s</a></svg>\n<math><mi>m</mi></math>\n<base href=\"https://evil/\">\n<meta http-equiv=refresh content=0>\n<link rel=stylesheet href=x>\n<style>body{display:none}</style>");
+        for needle in [
+            "<iframe", "srcdoc", "<object", "<embed", "<form", "formaction", "<svg", "xlink:href", "onload",
+            "<math", "<base", "<meta", "<link", "<style", "display:none",
+        ] {
+            assert!(!doc.html.contains(needle), "{needle} survived: {}", doc.html);
+        }
+    }
+
+    #[test]
+    fn strips_name_attribute_and_keeps_id_bare() {
+        // `name` would enable DOM clobbering of window globals; `id` is
+        // needed for heading anchors and is allowed (unprefixed).
+        let doc = r("<a name=\"__TAURI__\" id=\"x\">t</a>");
+        assert!(!doc.html.contains("name="), "{}", doc.html);
+        assert!(doc.html.contains("id=\"x\""), "{}", doc.html);
+    }
+
+    #[test]
     fn allows_raw_safe_html() {
         let doc = r("<div class=\"note\">hello</div>");
         assert!(doc.html.contains("class=\"note\""));
@@ -490,6 +549,20 @@ mod tests {
         let (doc, assets) = render("![alt](img/pic.png)", Path::new("/tmp/mdreader-test/docs"));
         assert!(doc.html.contains("/tmp/mdreader-test/docs/img/pic.png"));
         assert_eq!(assets, vec![PathBuf::from("/tmp/mdreader-test/docs/img/pic.png")]);
+    }
+
+    // Documents the intended (and security-relevant) behavior: relative
+    // destinations are NOT confined to the document's directory — a
+    // link may resolve above base_dir. The mitigation for "link points
+    // at something the OS would execute" is entirely on the frontend
+    // side (app.js's openWithSystem: extension denylist + confirmation
+    // dialog showing the resolved absolute path), plus lib.rs's
+    // Rust-side extension checks on every path-taking command. If this
+    // test ever needs to flip to "confined," those layers still stand.
+    #[test]
+    fn relative_links_may_escape_base_dir() {
+        let (doc, _assets) = render("[up](../../outside.md)", Path::new("/tmp/mdreader-test/a/b"));
+        assert!(doc.html.contains("href=\"/tmp/mdreader-test/outside.md\""), "{}", doc.html);
     }
 
     #[test]

@@ -19,6 +19,15 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Least-privilege default for every job's GITHUB_TOKEN. Only the `release`
+# job needs more, and it declares its own block below. Third-party
+# actions are pinned to full commit SHAs (the `# vX.Y.Z` comment is the
+# human-readable tag they were resolved from) so a moved or compromised
+# upstream tag can't change what runs here — dependabot
+# (.github/dependabot.yml) proposes the bumps.
+permissions:
+  contents: read
+
 jobs:
   # Fast compile-only gate for the two platforms nobody builds on locally
   # (dev machine is macOS, per CLAUDE.md). Catches platform-cfg mistakes —

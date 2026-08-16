@@ -593,6 +593,49 @@ function isExternal(href) {
   return href.includes("://") || href.startsWith("mailto:") || href.startsWith("tel:");
 }
 
+// ---------------------------------------------------------------------
+// Handing a non-markdown link to the OS (`opener.openPath`) is the one
+// place this app turns untrusted document content into "run something
+// outside the webview". By the time a link reaches the click handler,
+// render.rs has already resolved it to an absolute filesystem path (see
+// the path-resolution invariant in CLAUDE.md), so a document shipped
+// alongside `install.command` / `Setup.exe` / `x.desktop` could name it
+// with any link text it likes. Two layers, deliberately both:
+//   1. a denylist of extensions the OS would *execute* rather than
+//      *display* — refused outright, with a message;
+//   2. a native yes/no dialog showing the resolved absolute path (not the
+//      link text) for everything else, so a click is never silent.
+// The denylist is a convenience, not the guarantee — the confirmation is.
+// Never call `tauri.opener.openPath` anywhere except through
+// openWithSystem.
+// ---------------------------------------------------------------------
+const BLOCKED_OPEN_EXTENSIONS = new Set([
+  // macOS
+  "app", "command", "terminal", "workflow", "scpt", "action", "pkg", "dmg",
+  // Windows
+  "exe", "bat", "cmd", "com", "scr", "ps1", "hta", "lnk", "msi", "pif", "vbs", "vbe", "wsf", "wsh", "reg",
+  // Linux / cross-platform
+  "desktop", "sh", "run", "appimage", "js", "jar",
+]);
+
+async function openWithSystem(href) {
+  if (BLOCKED_OPEN_EXTENSIONS.has(extOf(href))) {
+    await tauri.dialog.message(`Refusing to open this file — it looks like an executable.\n\n${href}`, {
+      title: "Blocked",
+      kind: "warning",
+    });
+    return;
+  }
+  const ok = await tauri.dialog.ask(`Open this file with its default application?\n\n${href}`, {
+    title: "Open file",
+    kind: "warning",
+    okLabel: "Open",
+    cancelLabel: "Cancel",
+  });
+  if (!ok) return;
+  await tauri.opener.openPath(href).catch((err) => console.error("failed to open path", err));
+}
+
 // Delegated once on the shared container rather than per-link per-render:
 // tabs' content persists, so this fires for every tab without rebinding.
 // In-page `#anchor` clicks are handled here too (not left to the browser)
@@ -620,7 +663,7 @@ els.contentWrap.addEventListener("click", (e) => {
   if (markdownExtensions.has(extOf(href))) {
     openPaths([href]);
   } else {
-    tauri.opener.openPath(href).catch((err) => console.error("failed to open path", err));
+    openWithSystem(href);
   }
 });
 
@@ -1860,7 +1903,10 @@ async function wireDragDrop() {
       els.dropOverlay.classList.remove("visible");
     } else if (type === "drop") {
       els.dropOverlay.classList.remove("visible");
-      openPaths(event.payload.paths || []);
+      // Same extension filter the open dialog applies (openFileDialog);
+      // anything else dropped is ignored rather than handed to
+      // open_markdown_file, which would refuse it Rust-side anyway.
+      openPaths((event.payload.paths || []).filter((p) => markdownExtensions.has(extOf(p))));
     }
   });
 }

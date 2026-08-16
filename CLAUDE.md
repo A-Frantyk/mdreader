@@ -113,6 +113,48 @@ planned; `#[cfg_attr(mobile, ...)]` in `lib.rs`/`main.rs` is inert
   this into a general-purpose write command, and don't add
   `tauri-plugin-fs` alongside it.
 
+- **Every path-taking Tauri command validates the extension Rust-side —
+  the JS filters are UX, not the boundary.** `require_markdown_path`
+  (`lib.rs`) gates `open_markdown_file`, `read_markdown_source`, and
+  `save_markdown_file` alike. The open dialog, drop handler, and link
+  click also filter by extension in `app.js`, but a compromised webview
+  can call `invoke` directly, so a command that would read or write
+  `~/.ssh/id_rsa` when handed that path is a real hole regardless of
+  what the frontend does. Any new command that takes a path goes
+  through `require_markdown_path` (or a stricter check) first.
+
+- **`opener.openPath` is only ever called via `openWithSystem`
+  (`app.js`), which denylists executable extensions and then shows a
+  native confirm with the resolved absolute path.** By the time a link
+  reaches the click handler, `render.rs` has resolved it to an absolute
+  filesystem path — including `../` escapes above the document's own
+  directory (deliberate; `relative_links_may_escape_base_dir` pins it).
+  `opener:allow-open-path` has no scope, so a document shipped next to
+  `install.command` / `Setup.exe` / `x.desktop` could name it under any
+  link text and a bare `openPath` would run it on one click. The
+  denylist (`BLOCKED_OPEN_EXTENSIONS`) is convenience; the confirmation
+  dialog is the guarantee — don't add a second `openPath` call site,
+  and don't make the confirm skippable.
+
+- **`sanitize()` allows `style` on `td`/`th` only, and filters the value
+  to `text-align`.** That's the one property pulldown-cmark's GFM table
+  writer emits. Ammonia's default is `style_properties: None`, which
+  passes a declaration block through *verbatim* — raw
+  `<td style="position:fixed;inset:0;background:url(https://…)">` in a
+  document would paint over the whole window and beacon out. Widen the
+  `filter_style_properties` list only for a property `render.rs` itself
+  produces, never for "a document might want it."
+
+- **`app.security.csp` is set (`tauri.conf.json`); don't null it.** The
+  app loads no remote code — every script/style/font is vendored — so
+  `default-src 'self'` costs nothing and is what stands between a future
+  mermaid/KaTeX/ammonia bypass and IPC access or exfil. If a change
+  genuinely needs a looser directive, loosen *that one directive* and
+  say why in a comment next to it; `'unsafe-inline'` for `style-src` is
+  already there because mermaid/KaTeX/CodeMirror set inline styles, and
+  `img-src` deliberately keeps `https:`/`http:` so documents' remote
+  images still load (a tracking-pixel trade-off, made knowingly).
+
 - **`scope.allow_file` grants are additive and never revoked, and live
   preview calls `render_and_grant` on every debounced keystroke.**
   `render()`'s asset list reflects whatever an image destination
@@ -233,6 +275,16 @@ instead of launching your new one.
   ships a `SHA256SUMS-*.txt` alongside it — see `README.md`'s
   "Download & install".
 - No auto-update mechanism.
+- Sanitizer/DoS headroom not addressed yet: `unique_id` in `render.rs`
+  is quadratic on N duplicate headings, and syntect's `fancy-regex`
+  grammars have no backtracking limit, so a hostile fence body can hang
+  a render (per debounced keystroke in split mode). Hang, not crash —
+  `panic = "abort"` only matters for real panics, and there are no
+  `unwrap`s on the render hot path. Cap/timeout is a possible follow-up.
+- On Windows, a link/image whose resolved path falls back to
+  `lexically_normalize` comes out as `C:\...`, which ammonia parses as
+  URL scheme `c` and drops — a functional (not security) bug, untested
+  on a real Windows machine.
 - "New Document" (`newDocument` in `app.js`) creates an untitled,
   never-saved tab (`tab.path === null` until a successful save); its first
   Cmd/Ctrl+S goes through `saveTabAs`/`save_markdown_file_as` instead of

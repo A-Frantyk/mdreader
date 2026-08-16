@@ -4,7 +4,8 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "icon": "tauri icon src-tauri/icons/app-icon.svg"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"

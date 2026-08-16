@@ -40,7 +40,7 @@ const els = {
 const state = {
   // { kind, path, title, headings, hasMermaid, hasMath, rendered, paneEl,
   //   previewEl, contentEl, mode, source, savedSource, dirty, editor,
-  //   editorEl, previewTimer, saving }
+  //   editorEl, splitterEl, previewTimer, saving }
   // See createTabShell (the shared shape) and enterSplitMode (edit-mode
   // fields). `path` is null for a brand-new, never-saved document — see
   // newDocument. `kind` is "document" for every ordinary tab, or
@@ -123,6 +123,25 @@ function cycleTheme() {
 }
 
 // ---------------------------------------------------------------------
+// Split-pane ratio: one persisted preference shared by every tab, same
+// pattern as THEME_KEY above (a bare-string localStorage key, a
+// `*Preference()` getter that seeds+persists a default on first read).
+// Global rather than per-tab deliberately — dragging the divider is a
+// statement about how you want to work, not about one document, so a
+// newly split tab already matches the last ratio you set instead of
+// jumping back to 50/50. See attachSplitterDrag for where this is read
+// and written.
+// ---------------------------------------------------------------------
+const SPLIT_RATIO_KEY = "mdreader.splitRatio";
+const SPLIT_RATIO_DEFAULT = 50;
+const SPLIT_MIN_PANE_PX = 160; // neither pane collapses to unusably narrow
+
+function splitRatio() {
+  const stored = Number(localStorage.getItem(SPLIT_RATIO_KEY));
+  return Number.isFinite(stored) && stored > 0 ? stored : SPLIT_RATIO_DEFAULT;
+}
+
+// ---------------------------------------------------------------------
 // Open-file dialog, filtered to the extensions this app is registered
 // for (see markdownExtensions below) — feeds the same openPaths() that
 // every other way of opening a file goes through.
@@ -184,6 +203,7 @@ function createTabShell(overrides) {
     dirty: false,
     editor: null,
     editorEl: null,
+    splitterEl: null,
     previewTimer: null,
     previewSeq: 0,
     previewInFlight: false,
@@ -914,10 +934,6 @@ async function saveTabAs(tab) {
   }
 }
 
-/// Create (once) the CodeMirror instance and editor-pane/splitter DOM for
-/// `tab`, fetch its source lazily if this is the first time it's been
-/// edited, and switch the tab into split mode. Safe to call on a tab
-/// already in split mode.
 /// Wrap (or, on a second call, unwrap) the editor's current selection in
 /// `marker` — the logic behind the Bold/Italic/Strikethrough toolbar
 /// buttons and their keyboard shortcuts. `marker` must be symmetric (same
@@ -1234,6 +1250,13 @@ function createEditorToolbar(tab) {
   return bar;
 }
 
+/// Create (once) the CodeMirror instance and editor-pane/splitter DOM for
+/// `tab`, fetch its source lazily if this is the first time it's been
+/// edited, and switch the tab into split mode. Safe to call on a tab
+/// already in split mode. The splitter is drag-resizable — see
+/// attachSplitterDrag — with the pane widths driven by the --split-ratio
+/// custom property (styles.css) so this function only ever has to set
+/// one number.
 async function enterSplitMode(tab) {
   if (tab.mode === "split") return;
 
@@ -1260,6 +1283,7 @@ async function enterSplitMode(tab) {
   // in between" path.
   tab.mode = "split";
   tab.paneEl.classList.add("split");
+  tab.paneEl.style.setProperty("--split-ratio", `${splitRatio()}%`);
 
   if (!tab.editorEl) {
     const editorPane = document.createElement("div");
@@ -1270,8 +1294,16 @@ async function enterSplitMode(tab) {
     editorPane.appendChild(toolbar);
     const splitter = document.createElement("div");
     splitter.className = "pane-splitter";
+    // Semantics for assistive tech; there is deliberately no tabindex or
+    // keyboard resize here — arrow-key resize would need its own keydown
+    // handler and tab-order slot, a bigger decision than "make the drag
+    // work."
+    splitter.setAttribute("role", "separator");
+    splitter.setAttribute("aria-orientation", "vertical");
     tab.paneEl.insertBefore(editorPane, tab.previewEl);
     tab.paneEl.insertBefore(splitter, tab.previewEl);
+    tab.splitterEl = splitter;
+    attachSplitterDrag(tab, splitter);
 
     // If construction throws (e.g. a missing mode dependency — see the
     // overlay.js comment in ensureCodeMirror), don't leave the pane
@@ -1310,6 +1342,7 @@ async function enterSplitMode(tab) {
       toolbar.remove();
       editorPane.remove();
       splitter.remove();
+      tab.splitterEl = null;
       tab.mode = "view";
       tab.paneEl.classList.remove("split");
       throw err;
@@ -1324,6 +1357,96 @@ async function enterSplitMode(tab) {
 
   tab.editor.refresh();
   if (state.tabs[state.activeIndex] === tab) els.editToggleBtn.classList.add("active");
+}
+
+/// Drag-to-resize for the editor/preview divider. Pointer events (not
+/// mouse events) for two concrete reasons: setPointerCapture routes every
+/// subsequent move/up straight to the splitter itself, so there's no
+/// document-level listener to add and remove and no "button released
+/// outside the window, drag never ended" state to clean up; and one code
+/// path covers mouse, trackpad, touch and pen across all three OSes
+/// instead of a mouse-only one. The visible affordance is the OS's own
+/// col-resize cursor (styles.css) — no handle graphic, no button.
+///
+/// Attached once, when the splitter is first created (enterSplitMode),
+/// and never torn down — same "create once, keep alive" lifetime as the
+/// splitter element itself and tab.editorEl.
+function attachSplitterDrag(tab, splitter) {
+  let rafId = 0;
+
+  const applyFromX = (clientX) => {
+    const rect = tab.paneEl.getBoundingClientRect();
+    if (rect.width <= 0) return;
+    // Clamp in pixels, not percent: a percentage floor would still let
+    // both sides collapse to an uselessly narrow column on a small
+    // window, and the editor toolbar (13 buttons, .editor-toolbar's
+    // overflow-x) needs a real minimum to stay usable.
+    const min = SPLIT_MIN_PANE_PX;
+    const max = rect.width - SPLIT_MIN_PANE_PX;
+    if (max <= min) return; // window too narrow to split at all right now
+    const x = Math.min(Math.max(clientX - rect.left, min), max);
+    setSplitRatio((x / rect.width) * 100);
+  };
+
+  // Applies `pct` to every split tab, not just this one — the ratio is a
+  // shared preference (see splitRatio's comment), so a tab that's already
+  // in split mode elsewhere must not keep showing the old value.
+  const setSplitRatio = (pct) => {
+    for (const t of state.tabs) {
+      if (t.mode === "split") t.paneEl.style.setProperty("--split-ratio", `${pct}%`);
+    }
+  };
+
+  const persist = () => {
+    const pct = parseFloat(tab.paneEl.style.getPropertyValue("--split-ratio"));
+    if (Number.isFinite(pct)) localStorage.setItem(SPLIT_RATIO_KEY, String(pct));
+  };
+
+  splitter.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return; // ignore right/middle click
+    e.preventDefault(); // no text-selection drag
+    splitter.setPointerCapture(e.pointerId);
+    splitter.classList.add("dragging"); // rule already exists, styles.css
+    document.body.classList.add("is-splitting");
+  });
+
+  splitter.addEventListener("pointermove", (e) => {
+    if (!splitter.hasPointerCapture(e.pointerId)) return;
+    // Coalesce to one layout write per frame. CodeMirror re-measures on
+    // every refresh(), and lineWrapping means it has to re-wrap each
+    // visible line — an unthrottled refresh per pointermove is the one
+    // way this drag could feel heavy on a large document.
+    if (rafId) return;
+    rafId = requestAnimationFrame(() => {
+      rafId = 0;
+      applyFromX(e.clientX);
+      tab.editor?.refresh();
+    });
+  });
+
+  const endDrag = (e) => {
+    if (!splitter.hasPointerCapture(e.pointerId)) return;
+    splitter.releasePointerCapture(e.pointerId);
+    if (rafId) {
+      cancelAnimationFrame(rafId);
+      rafId = 0;
+    }
+    splitter.classList.remove("dragging");
+    document.body.classList.remove("is-splitting");
+    applyFromX(e.clientX);
+    tab.editor?.refresh();
+    persist();
+  };
+  splitter.addEventListener("pointerup", endDrag);
+  splitter.addEventListener("pointercancel", endDrag);
+
+  // Double-click resets to an even split — the standard convention for a
+  // split sash, and the reason this needs no separate reset button.
+  splitter.addEventListener("dblclick", () => {
+    setSplitRatio(SPLIT_RATIO_DEFAULT);
+    localStorage.setItem(SPLIT_RATIO_KEY, String(SPLIT_RATIO_DEFAULT));
+    tab.editor?.refresh();
+  });
 }
 
 function exitSplitMode(tab) {

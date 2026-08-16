@@ -260,6 +260,19 @@ instead of launching your new one.
   The keyboard shortcuts work regardless, since muda registers no GTK
   accelerator for these items to steal.
 - No scroll sync between the editor and preview panes in split mode.
+- The split-pane divider (`app.js`'s `attachSplitterDrag`) is
+  drag-resizable via Pointer Events + `setPointerCapture` — the pane
+  widths come from one CSS custom property (`--split-ratio`, set on each
+  `.tab-pane`) so the drag handler only ever writes one number. The ratio
+  is a single global preference (`localStorage`'s `mdreader.splitRatio`),
+  not per-tab — same "one persisted setting" grain as the theme toggle.
+  The splitter element itself is created once per tab (in `enterSplitMode`,
+  alongside `editorEl`) and its listeners are never torn down, the same
+  create-once/keep-alive lifetime the rest of a tab's DOM already follows
+  — so there's deliberately no cleanup path in `exitSplitMode`. No
+  keyboard resize (no `tabindex` on the separator) — that would need its
+  own keydown handling alongside the app's global handler and a tab-order
+  decision, out of scope for the drag itself.
 - The editor's formatting toolbar (`app.js`'s `TOOLBAR_GROUPS`) covers
   Bold/Italic/Strikethrough/Inline-code, Heading/Blockquote/Bullet-list/
   Numbered-list/Task-list, and Link/Image/Horizontal-rule/Table/Footnote —

@@ -282,26 +282,65 @@ html, body {
   /* Flex column, not block: the formatting toolbar (.editor-toolbar) is
      a fixed-height row above CodeMirror's own wrapper div — both are
      children of .editor-pane, in that DOM order (see
-     createEditorToolbar's comment in app.js for why order matters). */
+     createEditorToolbar's comment in app.js for why order matters).
+     flex-basis is --split-ratio (a percent, set by attachSplitterDrag in
+     app.js) rather than a fixed 50% — flex-grow:0 so this side never
+     grows past the ratio JS set; see .preview-scroll below for the other
+     half of this pairing. */
   display: flex;
   flex-direction: column;
-  flex: 1 1 50%;
+  flex: 0 1 var(--split-ratio, 50%);
   min-width: 0;
   height: 100%;
   overflow: hidden; /* CodeMirror manages its own internal scroller */
   border-right: 1px solid var(--border);
 }
 
+/* Paired with .editor-pane's flex-basis above: the editor takes the
+   explicit --split-ratio basis and the preview takes whatever's left via
+   a zero basis + grow:1. Sizing only one side this way is what keeps the
+   two from ever disagreeing about the total once the 6px splitter is
+   subtracted. The base .preview-scroll rule further down still carries
+   flex: 1 1 50% for view-only mode, where it's the pane's only child. */
+.tab-pane.split .preview-scroll {
+  flex: 1 1 0;
+}
+
 .tab-pane.split .pane-splitter {
   display: block;
+  position: relative; /* anchors the ::before hit-area below */
   flex: 0 0 6px;
   cursor: col-resize;
   background: var(--border);
+  touch-action: none; /* a pointer drag here is a resize, not a scroll gesture */
+}
+
+/* A 6px strip is thin to hit precisely. Widen the *interactive* area to
+   ~16px with a transparent overlay while leaving the visible seam at 6px
+   — the alternative (a wider visible strip) would read as a UI element
+   rather than a seam between panes. */
+.tab-pane.split .pane-splitter::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -5px;
+  right: -5px;
 }
 
 .pane-splitter:hover,
 .pane-splitter.dragging {
   background: var(--accent);
+}
+
+/* Set on <body> by attachSplitterDrag (app.js) only for the duration of a
+   splitter drag, so dragging fast past the divider doesn't flicker the
+   cursor back to a text I-beam over the editor, and text elsewhere on the
+   page doesn't get selected as the pointer crosses it mid-drag. */
+body.is-splitting {
+  cursor: col-resize;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .editor-toolbar {

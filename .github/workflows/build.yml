@@ -1,17 +1,7 @@
 name: Build
 
-# Produces per-platform installers as downloadable workflow artifacts —
-# whichever formats tauri.conf.json's bundle.targets:"all" yields on each
-# OS (macOS: a universal .dmg; Windows: NSIS .exe and MSI; Linux: .deb/.rpm
-# — see the `build` job's Linux matrix leg for why AppImage is excluded)
-# — driven by the same bundle.fileAssociations config used everywhere else
-# (see src-tauri/tauri.conf.json and CLAUDE.md). Each artifact is staged flat
-# (see the "Stage installer(s)" step) so downloading and unzipping it
-# hands you the installer directly, not a folder tree to click through.
-#
-# Pushing a `v*` tag additionally runs the `release` job, which collects
-# every platform's staged installers and checksums into a GitHub Release —
-# see that job for why this is separate from the artifact upload above.
+# Produces per-platform installers as downloadable artifacts. Pushing a
+# `v*` tag additionally publishes them as a GitHub Release.
 on:
   push:
     branches: [main, master]
@@ -20,22 +10,15 @@ on:
   workflow_dispatch:
 
 # Least-privilege default for every job's GITHUB_TOKEN. Only the `release`
-# job needs more, and it declares its own block below. Third-party
-# actions are pinned to full commit SHAs (the `# vX.Y.Z` comment is the
-# human-readable tag they were resolved from) so a moved or compromised
-# upstream tag can't change what runs here — dependabot
-# (.github/dependabot.yml) proposes the bumps.
+# job needs more (its own block below). Third-party actions are pinned to
+# full commit SHAs (trailing comment = the tag/branch resolved from) so a
+# moved or compromised upstream ref can't change what runs here —
+# dependabot (.github/dependabot.yml) proposes the bumps.
 permissions:
   contents: read
 
 jobs:
-  # Fast compile-only gate for the two platforms nobody builds on locally
-  # (dev machine is macOS, per CLAUDE.md). Catches platform-cfg mistakes —
-  # e.g. matching a macOS-only tauri::RunEvent variant unconditionally —
-  # in ~2 minutes instead of after the full `build` job's Tauri bundling
-  # pipeline runs. macOS itself is intentionally excluded here: it's
-  # already exercised by every local `cargo build`/`cargo test`, and its
-  # own leg below covers it.
+  # macOS is excluded: already exercised by every local cargo build/test.
   check:
     strategy:
       fail-fast: false
@@ -44,7 +27,7 @@ jobs:
 
     runs-on: ${{ matrix.platform }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Install Linux system dependencies
         if: matrix.platform == 'ubuntu-22.04'
@@ -53,10 +36,10 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable (branch, not a version tag)
 
       - name: Cache Rust build
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: src-tauri -> target
 
@@ -92,7 +75,7 @@ jobs:
 
     runs-on: ${{ matrix.platform }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Install Linux system dependencies
         if: matrix.platform == 'ubuntu-22.04'
@@ -101,20 +84,18 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: lts/*
           cache: npm
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable (branch, not a version tag)
         with:
-          # Universal macOS builds need both Apple Silicon and Intel
-          # targets installed; Linux/Windows build for the host only.
           targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       - name: Cache Rust build
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: src-tauri -> target
 
@@ -124,27 +105,18 @@ jobs:
       - name: Build
         run: npm run tauri build -- ${{ matrix.args }}
 
-      # actions/upload-artifact preserves directory structure starting at
-      # the first wildcard segment in `path` — globbing straight into
-      # target/ meant downloaded artifacts unzipped into
-      # release/bundle/<type>/ before you reached the actual installer.
-      # Stage every installer *file* Tauri produced (tauri.conf.json's
-      # targets:"all" means every format available on the OS, not just
-      # one — Windows gets NSIS+MSI, Linux gets deb/rpm per the matrix
-      # leg's --bundles override above) into a flat directory first, so
-      # the artifact zip has no wrapper folders
-      # at all. bundle/macos/<App>.app is deliberately pruned: it's a
-      # directory tree (the raw .app bundle), not a double-clickable
-      # installer — the .dmg next to it is.
+      # upload-artifact preserves directory structure starting at the
+      # first wildcard segment in `path`, so installers are staged flat
+      # here first rather than globbed straight from target/. macOS's
+      # .app bundle is pruned — it's a directory tree, not the
+      # double-clickable installer (the .dmg next to it is).
       #
       # Plain `find`, not a bash globstar loop: macos-latest's default
-      # `bash` in PATH is the OS-shipped 3.2 (Apple froze it there over
-      # GPLv3 licensing — confirmed locally, `bash --version`), and
-      # `globstar` needs bash 4+. `shell: bash` steps run with `-e` by
-      # default, so `shopt -s globstar` failing on an old bash would abort
-      # the whole step, not just no-op. `find`'s `-prune`/`-o`/`-exec` are
-      # POSIX and behave the same under GNU find (Linux, and Windows via
-      # Git Bash) and BSD find (macOS) — no shell-version dependency.
+      # `bash` is the OS-shipped 3.2 (frozen there over GPLv3 licensing),
+      # and `globstar` needs bash 4+ — `shell: bash` steps run with `-e`,
+      # so `shopt -s globstar` failing would abort the step outright.
+      # `find`'s `-prune`/`-o`/`-exec` are POSIX and behave the same under
+      # GNU find (Linux, Windows via Git Bash) and BSD find (macOS).
       - name: Stage installer(s) for upload
         shell: bash
         run: |
@@ -154,19 +126,14 @@ jobs:
           ls -la dist
 
       - name: Upload installer
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: mdreader-${{ matrix.name }}
           path: dist/*
           if-no-files-found: error
 
-  # Only runs on a `v*` tag push (see the `on:` trigger above). Collects
-  # every platform's staged installers + SHA256SUMS from the `build` job
-  # into one GitHub Release. Kept as a separate job (not folded into
-  # `build`) because it needs all three platforms' artifacts downloaded
-  # together before it can publish — `build`'s own upload-artifact step
-  # above is unconditional and keeps working the same for ordinary
-  # branch/PR pushes, which never reach this job at all.
+  # Separate from `build` because it needs all three platforms' artifacts
+  # downloaded together before it can publish.
   release:
     needs: build
     if: startsWith(github.ref, 'refs/tags/v')
@@ -177,7 +144,7 @@ jobs:
       attestations: write
     steps:
       - name: Download all platform installers
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: artifacts
 
@@ -187,20 +154,17 @@ jobs:
           find artifacts -type f -exec mv {} release/ \;
           ls -la release
 
-      # Public-repo only: produces a verifiable provenance attestation for
-      # every installer (`gh attestation verify`). This repo is private
-      # today, and GitHub's attestation API rejects private-repo requests —
-      # continue-on-error keeps that failure from blocking the Release
-      # publish below. Drop continue-on-error once the repo goes public
-      # (Tier 1 in the trust-hardening plan).
+      # Public-repo only: GitHub's attestation API rejects private-repo
+      # requests. continue-on-error keeps that from blocking the Release
+      # publish below — drop it once the repo goes public.
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         continue-on-error: true
         with:
           subject-path: 'release/*'
 
       - name: Publish release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: release/*
           generate_release_notes: true

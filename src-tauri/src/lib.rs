@@ -11,17 +11,9 @@ use tauri::{AppHandle, Emitter, Manager};
 // Generates `pub const MARKDOWN_EXTENSIONS: &[&str]` from `tauri.conf.json`'s
 // bundle.fileAssociations at *build* time — see build.rs's
 // `generate_markdown_extensions` doc comment for why this can't be read
-// back from `Context::config()` at runtime (it can't, on any platform:
-// tauri-utils' codegen unconditionally drops that field when embedding
-// the config into the binary).
+// back from `Context::config()` at runtime.
 include!(concat!(env!("OUT_DIR"), "/markdown_extensions.rs"));
 
-/// Markdown-file paths waiting to be opened, plus the set of extensions
-/// (from `MARKDOWN_EXTENSIONS`, generated from `tauri.conf.json`'s
-/// `bundle.fileAssociations` — the single source of truth, since that's
-/// what the OS itself uses to route files to this app) that count as
-/// "markdown" for argv/drop filtering.
-///
 /// Every entry point funnels through `queue`, which always pushes here
 /// first. The `main` window is created before `.setup()` runs (Tauri
 /// builds config windows, then calls the setup hook), so at cold start
@@ -31,14 +23,11 @@ include!(concat!(env!("OUT_DIR"), "/markdown_extensions.rs"));
 /// the emitted event as a hint (not the payload) means the frontend can
 /// always recover by draining on load, regardless of timing.
 ///
-/// `frontend_ready` guards the same class of race for the close handshake
-/// (see the `on_window_event` handler in `run`): a `CloseRequested` that
-/// fires before `app.js` has registered its `close-requested` listener
-/// would have its `prevent_close()` + emit silently dropped, leaving the
-/// window unclosable. The frontend flips this to `true` (via
-/// `mark_frontend_ready`) only after that listener exists; until then the
-/// handler lets the window close normally instead of trying to hand off
-/// to a listener that isn't there yet.
+/// `frontend_ready` guards the same race for the close handshake (see
+/// `on_window_event` in `run`): a `CloseRequested` firing before `app.js`
+/// registers its `close-requested` listener would have its
+/// `prevent_close()` + emit silently dropped. The frontend flips this via
+/// `mark_frontend_ready` only once that listener exists.
 struct AppState {
     pending: Mutex<Vec<PathBuf>>,
     markdown_extensions: HashSet<String>,
@@ -82,9 +71,7 @@ fn require_markdown_path(state: &AppState, path: &std::path::Path) -> Result<(),
 /// `my.notes` into `my.md`, silently discarding part of the name the user
 /// typed. Appending also matches what the native save dialogs themselves
 /// do on macOS/Windows when they add a default extension, so all three
-/// platforms converge on the same result. Already-markdown paths (matched
-/// via `is_markdown_path`, so extension casing is preserved) pass through
-/// unchanged.
+/// platforms converge on the same result.
 fn normalize_markdown_path(state: &AppState, path: &std::path::Path) -> PathBuf {
     if is_markdown_path(state, path) {
         return path.to_path_buf();
@@ -103,14 +90,9 @@ fn normalize_markdown_path(state: &AppState, path: &std::path::Path) -> PathBuf 
 /// image reference must re-grant scope or the image silently fails to
 /// load. Grants are additive and never revoked for the app's lifetime.
 ///
-/// Under live-preview re-rendering this function runs on every debounced
-/// keystroke, and `render()`'s asset list reflects whatever the image
-/// destination *currently* is — including a half-typed path mid-edit
-/// (`![](diagram.png)` grants scope for `d`, `di`, `dia`, … along the
-/// way). Filtering to paths that exist on disk before granting keeps that
-/// stream of transient, never-real paths out of the scope set; a grant
-/// for a path that doesn't exist yet is useless anyway, since there's
-/// nothing there for the asset protocol to serve.
+/// Under live preview this runs on every debounced keystroke, and a
+/// half-typed path (`![](diagram.png)` mid-type grants `d`, `di`, `dia`,
+/// …) would flood the scope set without the `is_file()` filter below.
 fn render_and_grant(app: &AppHandle, source: &str, base_dir: &std::path::Path) -> render::RenderedDoc {
     let (doc, assets) = render::render(source, base_dir);
 
@@ -122,10 +104,6 @@ fn render_and_grant(app: &AppHandle, source: &str, base_dir: &std::path::Path) -
     doc
 }
 
-/// Read + render a markdown file. Relative image/link destinations are
-/// resolved to absolute paths by the renderer itself (it's the only side
-/// that knows the document's directory); see `render_and_grant` for the
-/// scope-granting half of this.
 fn load_document(app: &AppHandle, path: &std::path::Path) -> Result<OpenedDocument, String> {
     let source = std::fs::read_to_string(path)
         .map_err(|e| format!("Couldn't read {}: {}", path.display(), e))?;
@@ -139,9 +117,6 @@ fn load_document(app: &AppHandle, path: &std::path::Path) -> Result<OpenedDocume
     })
 }
 
-/// Queue a path for the frontend to open, and — if the window already
-/// exists — nudge it to drain the queue now. See `AppState` for why the
-/// nudge is a hint rather than the payload.
 fn queue(app: &AppHandle, path: PathBuf) {
     app.state::<AppState>().pending.lock().unwrap().push(path);
     if let Some(window) = app.get_webview_window("main") {
@@ -159,16 +134,12 @@ fn queue_markdown_args(app: &AppHandle, paths: impl Iterator<Item = PathBuf>) {
     }
 }
 
-/// Lets the frontend classify a clicked link ("try to open it as a
-/// document" vs "hand it to the OS") without hand-duplicating the
-/// extension list that already lives in `tauri.conf.json`. Returns
-/// `MARKDOWN_EXTENSIONS` in its declared order rather than iterating
-/// `state.markdown_extensions` (a `HashSet`, so iteration order is
-/// unspecified and varies run to run) — order matters here because the
-/// frontend's save-as filter list feeds the native save dialog, and both
-/// NSSavePanel (macOS) and the Windows common dialog append the *first*
-/// filter extension when the user types a bare filename. A `HashSet`
-/// iteration order would make that default extension nondeterministic.
+/// Returns `MARKDOWN_EXTENSIONS` in its declared order rather than
+/// iterating `state.markdown_extensions` (a `HashSet`, so order is
+/// unspecified) — the frontend's save-as filter list feeds the native
+/// save dialog, and NSSavePanel/the Windows common dialog both append the
+/// *first* filter extension when the user types a bare filename, so a
+/// `HashSet`'s iteration order would make that default nondeterministic.
 #[tauri::command]
 fn markdown_extensions() -> Vec<String> {
     MARKDOWN_EXTENSIONS.iter().map(|s| s.to_string()).collect()
@@ -193,22 +164,14 @@ fn open_markdown_file(
     load_document(&app, path)
 }
 
-/// Read a markdown file's raw source, for the editor. Kept separate from
-/// `open_markdown_file`'s payload — that command runs on every view-only
-/// open (the common case), and doubling its IPC payload with source text
-/// nobody reads in view mode would be wasteful. Fetched lazily, once, the
-/// first time a tab enters edit mode.
+/// Kept separate from `open_markdown_file` — doubling that command's IPC
+/// payload with source text nobody reads in view mode would be wasteful.
 #[tauri::command(async)]
 fn read_markdown_source(state: tauri::State<AppState>, path: String) -> Result<String, String> {
     require_markdown_path(&state, std::path::Path::new(&path))?;
     std::fs::read_to_string(&path).map_err(|e| format!("Couldn't read {}: {}", path, e))
 }
 
-/// Re-render markdown source for the live preview pane. `base_path` is
-/// the document's own path, used the same way `load_document` uses a
-/// file's parent directory to resolve relative image/link destinations;
-/// `None` for an untitled document with no path yet, in which case the
-/// current working directory stands in until Save As gives it a real one.
 #[tauri::command(async)]
 fn render_markdown(
     app: AppHandle,
@@ -225,21 +188,9 @@ fn render_markdown(
     Ok(render_and_grant(&app, &source, &base_dir))
 }
 
-/// Write edited content back to disk. A narrow, single-purpose command
-/// rather than `tauri-plugin-fs` — that plugin would grant the webview
-/// broad, scope-configured filesystem access, and this app renders
-/// untrusted markdown, so a command that writes exactly one
-/// extension-validated path is a materially smaller attack surface than a
-/// general-purpose fs bridge.
-///
-/// Writes to a temp file in the *same directory* as the target, then
-/// renames over it: same-directory matters because a cross-filesystem
-/// rename isn't atomic, and `std::fs::rename` replaces an existing
-/// destination on both Windows and Unix, so one code path covers both
-/// platforms without a `#[cfg]` split.
-/// The atomic-write half of `save_markdown_file`, factored out so it's
-/// unit-testable without an `AppHandle`/`State` — it only needs a path
-/// that exists on a real filesystem.
+/// Factored out from `save_markdown_file` so it's unit-testable without
+/// an `AppHandle`/`State` — it only needs a path that exists on a real
+/// filesystem.
 fn atomic_write(target: &std::path::Path, contents: &str) -> Result<(), String> {
     let dir = target
         .parent()
@@ -257,6 +208,17 @@ fn atomic_write(target: &std::path::Path, contents: &str) -> Result<(), String> 
     })
 }
 
+/// A narrow, single-purpose command rather than `tauri-plugin-fs` — that
+/// plugin would grant the webview broad, scope-configured filesystem
+/// access, and this app renders untrusted markdown, so a command that
+/// writes exactly one extension-validated path is a materially smaller
+/// attack surface than a general-purpose fs bridge.
+///
+/// Writes to a temp file in the *same directory* as the target, then
+/// renames over it: same-directory matters because a cross-filesystem
+/// rename isn't atomic, and `std::fs::rename` replaces an existing
+/// destination on both Windows and Unix, so one code path covers both
+/// platforms without a `#[cfg]` split.
 #[tauri::command(async)]
 fn save_markdown_file(
     state: tauri::State<AppState>,
@@ -268,13 +230,6 @@ fn save_markdown_file(
     atomic_write(path, &contents)
 }
 
-/// The write half of "create a new document": the target came straight
-/// out of a native save dialog, so unlike `save_markdown_file` it isn't
-/// guaranteed to already have a markdown extension — `normalize_markdown_path`
-/// appends one if needed. Reuses `atomic_write` verbatim (same validated,
-/// single-purpose write path as `save_markdown_file`, not a new one) and
-/// returns the final path so the frontend never has to build or guess an
-/// extension itself.
 #[tauri::command(async)]
 fn save_markdown_file_as(
     state: tauri::State<AppState>,
@@ -321,17 +276,11 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init());
 
-    // A hand-built menu, not `Menu::default()` — see menu.rs's module doc
-    // for why the default can't be reused (no File submenu on Linux, and
-    // its Window/File submenus carry an accelerator that collides with
-    // this app's own Cmd/Ctrl+W). `Builder::menu` (not `App::set_menu` in
-    // `.setup()`) so `Builder::build`'s "only install the macOS default
-    // when no menu was set" check suppresses that default outright,
-    // instead of installing-then-replacing it. Both `Builder::menu` and
-    // `Builder::on_menu_event` are `#[cfg(desktop)]` in the tauri crate
-    // itself — matching this project's mobile-is-not-a-target scope, but
-    // still gated here rather than assumed, per the platform-gating
-    // invariant.
+    // `Builder::menu` (not `App::set_menu` in `.setup()`), so
+    // `Builder::build`'s "only install the macOS default when no menu was
+    // set" check suppresses that default outright instead of
+    // installing-then-replacing it. See menu.rs's module doc for why the
+    // default itself can't be reused.
     #[cfg(desktop)]
     let builder = builder.menu(menu::build).on_menu_event(menu::handle);
 
@@ -352,30 +301,19 @@ pub fn run() {
 
     builder
         .setup(|app| {
-            // Prewarm syntect's syntax set (a ~360 KB deserialization) on
-            // a background thread so it's ready by the time a document
-            // with code fences actually needs it, instead of blocking
-            // the first render.
+            // Prewarm syntect's syntax set (~360 KB deserialization) so a
+            // document with code fences doesn't block on the first render.
             std::thread::spawn(|| std::sync::LazyLock::force(&render::SYNTAX_SET));
 
-            // Entry path 1: cold start on Windows/Linux — the file path
-            // is a plain argv entry. `args_os` (not `args`) so a
-            // non-UTF-8 filename can't panic the app before it paints.
+            // `args_os` (not `args`) so a non-UTF-8 filename can't panic
+            // the app before it paints.
             queue_markdown_args(app.handle(), std::env::args_os().skip(1).map(PathBuf::from));
             Ok(())
         })
-        // Not platform-gated (`WindowEvent::CloseRequested` carries no
-        // `#[cfg]` in the tauri crate) — intercepts the window's close
-        // button/Alt+F4/Cmd+W-on-titlebar the same way on every platform.
         // `prevent_close()` is called synchronously, in the same handler
-        // invocation that receives the event: the runtime checks whether
+        // invocation that receives the event — the runtime checks whether
         // it was called immediately after running listeners, so any
-        // `await` before it would let the window close anyway — this
-        // handler can only prevent-and-emit, never await the frontend's
-        // answer. The frontend drives the actual unsaved-changes prompt
-        // sequence after receiving "close-requested", then calls
-        // `quit_app` (== `AppHandle::exit`) when done, which does not
-        // loop back into this handler.
+        // `await` before it would let the window close anyway.
         .on_window_event(|window, event| {
             if window.label() != "main" {
                 return;
@@ -402,18 +340,11 @@ pub fn run() {
         .build(context)
         .expect("error while building tauri application")
         .run(|_app_handle, _event| {
-            // Entry path 2: cold start on macOS — the file path never
-            // appears in argv, it arrives as RunEvent::Opened, which
-            // (like .setup()) always runs after the window is built. The
-            // variant itself only exists on macOS/iOS/Android
+            // RunEvent::Opened only exists on macOS/iOS/Android
             // (tauri-2.11.5/src/app.rs:257-263) — matching on it
             // unconditionally is a compile error on Windows/Linux, not
-            // just a no-op, so this has to be cfg-gated. Desktop-only
-            // scope (Windows/Linux/macOS, no iOS/Android), so gate to
-            // exactly the one platform that's both in scope and needs it.
-            // Both closure params are unused on non-macOS once this
-            // statement is cfg'd out entirely, hence the leading
-            // underscores — they're still used by name below on macOS.
+            // just a no-op, so this has to be cfg-gated to the one
+            // platform that's both in scope and needs it.
             #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Opened { urls } = _event {
                 let paths = urls.into_iter().filter_map(|url| {
@@ -492,8 +423,6 @@ mod tests {
 
     #[test]
     fn normalize_markdown_path_appends_rather_than_replacing_a_non_markdown_extension() {
-        // set_extension would turn "my.notes" into "my.md", silently
-        // discarding part of the name the user typed — append instead.
         let state = test_state();
         assert_eq!(
             normalize_markdown_path(&state, std::path::Path::new("notes.txt")),
@@ -550,10 +479,6 @@ mod tests {
 
     #[test]
     fn atomic_write_to_a_nonexistent_directory_fails_without_touching_target() {
-        // Guards the failure path: no parent directory means atomic_write
-        // must return Err (from the initial std::fs::write to the temp
-        // path in that directory) rather than panicking or silently
-        // succeeding.
         let target = std::env::temp_dir()
             .join("mdreader-libtest-missing-dir-does-not-exist")
             .join("doc.md");

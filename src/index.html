@@ -36,13 +36,6 @@
             </div>
             <p class="hint">or drop a Markdown file here, or open one from your file manager.</p>
           </div>
-          <!-- Each open tab gets its own persistent div.tab-pane, appended
-               here by app.js: a .preview-scroll > article.content holding
-               the rendered document, plus (once the tab enters edit mode)
-               an .editor-pane hosting CodeMirror alongside it. Keeping
-               every tab's DOM alive (rather than re-hydrating a shared
-               node on every switch) is what makes tab switching free and
-               mermaid/KaTeX render exactly once per view. -->
         </main>
       </div>
 
@@ -74,10 +67,6 @@
         </div>
       </template>
 
-      <!-- Unsaved-changes prompt, shared by tab-close and app-quit (see
-           confirmUnsaved in app.js). The app's first custom modal — native
-           tauri.dialog.confirm only offers two buttons, and this needs
-           three (Save / Don't Save / Cancel). -->
       <div class="modal-backdrop" id="modal-backdrop">
         <div class="modal" role="alertdialog" aria-modal="true" aria-labelledby="modal-message">
           <p class="modal-message" id="modal-message"></p>

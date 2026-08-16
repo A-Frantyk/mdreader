@@ -1,9 +1,6 @@
-# Weekly dependency bumps as PRs. Three ecosystems: the Rust crates that
-# make up the app itself (tauri/wry/ammonia/pulldown-cmark…), the npm dev
-# dependency (@tauri-apps/cli), and the SHA-pinned actions in
-# .github/workflows/build.yml. Vendored browser libs under src/vendor/
-# (mermaid, KaTeX, CodeMirror) are NOT covered — they're checked in, not
-# package-managed; bump those by hand.
+# Vendored browser libs under src/vendor/ (mermaid, KaTeX, CodeMirror) are
+# NOT covered — they're checked in, not package-managed; bump those by
+# hand.
 version: 2
 updates:
   - package-ecosystem: cargo

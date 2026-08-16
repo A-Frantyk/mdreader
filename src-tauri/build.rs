@@ -4,12 +4,9 @@ use syntect::highlighting::{Color, Highlighter, Theme, ThemeSet};
 use syntect::html::{css_for_theme_with_class_style, ClassStyle};
 use syntect::parsing::Scope;
 
-/// The syntax-highlight CSS for the app's two fixed themes is fully
-/// determined at build time (it's a pure function of the theme, and there
-/// are only two). Generating it here — rather than at runtime, which would
-/// cost a `ThemeSet` load and an IPC round trip on every launch — means
-/// the frontend just links a static stylesheet, with zero JS and zero
-/// flash of unstyled code.
+/// Runs at build time, not runtime: it's a pure function of the theme
+/// (only two), so this avoids a `ThemeSet` load + IPC round trip on every
+/// launch — the frontend just links a static stylesheet, no FOUC.
 ///
 /// Two separate plain files, not one merged with a media query: the
 /// frontend has a manual Light/Dark override on top of OS dark-mode
@@ -29,10 +26,8 @@ fn generate_code_theme_css() {
 }
 
 /// Generates the *editor's* fence-highlighting colors from the same two
-/// syntect themes `generate_code_theme_css` uses for the read-only
-/// preview, so a document's colors look the same whether you're viewing
-/// it or editing it in the split pane (`app.js`'s `enterSplitMode`, CSS
-/// class `cm-s-mdreader-syntax`).
+/// syntect themes, so code looks the same in the read-only preview and
+/// the split-mode editor (`cm-s-mdreader-syntax`).
 ///
 /// This can't reuse `css_for_theme_with_class_style` above — that emits
 /// CSS keyed by syntect's *own* generated class names, which don't
@@ -47,12 +42,9 @@ fn generate_code_theme_css() {
 ///
 /// Deliberately does *not* emit background/foreground/cursor/gutter
 /// rules — those are owned by the hand-written `.cm-s-mdreader` theme in
-/// `styles.css` (which uses this app's own `--bg-elevated`/`--text`
-/// tokens, so the editor pane reads as part of this app and stays
-/// visibly distinct from the preview pane, rather than adopting
-/// syntect's background verbatim — InspiredGitHub's happens to be
-/// `#ffffff`, identical to this app's own light-theme `--bg`). The two
-/// stylesheets own disjoint CSS selectors on purpose; see CLAUDE.md.
+/// `styles.css`, so the editor pane stays visibly distinct from the
+/// preview pane rather than adopting syntect's background verbatim. The
+/// two stylesheets own disjoint CSS selectors on purpose; see CLAUDE.md.
 fn generate_codemirror_theme_css() {
     let theme_set = ThemeSet::load_defaults();
     let light = codemirror_theme_css(&theme_set.themes["InspiredGitHub"]);
@@ -72,16 +64,12 @@ fn codemirror_theme_css(theme: &Theme) -> String {
         hex(highlighter.style_for_stack(&[s]).foreground)
     };
 
-    // cm-comment, cm-variable-2, and cm-tag are deliberately absent here
-    // even though a real language mode would use all three (comments,
-    // secondary variables, HTML tags) — markdown.js reuses those same
-    // three CodeMirror token classes for its own non-code purposes
-    // (inline `code` spans, nested list markers, HTML embedded in
-    // prose), so the hand-written cm-s-mdreader theme in styles.css owns
-    // them instead. Emitting rules for them here would create two
-    // same-specificity selectors fighting over the same class, with the
-    // winner decided only by which stylesheet happens to be linked
-    // later — see the comment above .cm-s-mdreader in styles.css.
+    // cm-comment, cm-variable-2, and cm-tag are deliberately absent here:
+    // markdown.js reuses those same token classes for its own non-code
+    // purposes (inline `code` spans, list markers, embedded HTML), so
+    // styles.css's hand-written cm-s-mdreader theme owns them instead —
+    // emitting rules here too would create dueling same-specificity
+    // selectors. See the comment above .cm-s-mdreader in styles.css.
     format!(
         ".cm-s-mdreader-syntax .cm-keyword {{ color: {kw}; }}\n\
          .cm-s-mdreader-syntax .cm-atom {{ color: {atom}; }}\n\

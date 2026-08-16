@@ -1,15 +1,14 @@
 //! Markdown -> sanitized HTML rendering.
 //!
-//! Pipeline: pulldown-cmark (GFM) -> syntect (code fence highlighting) ->
-//! ammonia (sanitize). All of it runs as ONE pass over the parser's event
-//! stream, transformed and fed through a single `pulldown_cmark::html::push_html`
-//! call — `HtmlWriter` carries state across events (table head/body,
-//! footnote numbering), so calling it more than once per document silently
-//! corrupts that state. Headings and code fences are rewritten into
-//! `Event::Html(..)` (the library's own escape hatch) inline in the stream;
-//! everything else — including tables, footnotes, and inline markup inside
-//! headings — flows through untouched and gets pulldown-cmark's own,
-//! correct rendering.
+//! Everything runs as ONE pass over the parser's event stream, transformed
+//! and fed through a single `pulldown_cmark::html::push_html` call —
+//! `HtmlWriter` carries state across events (table head/body, footnote
+//! numbering), so calling it more than once per document silently corrupts
+//! that state. Code fences are rewritten into a single `Event::Html(..)`
+//! per block; headings keep their real `Start`/`End` events (only `id` is
+//! overridden, with an anchor `<a>` spliced in as a sibling `Event::Html`),
+//! so their inline markup still gets pulldown-cmark's own rendering.
+//! Everything else flows through untouched.
 //!
 //! Relative image/link destinations are resolved to absolute filesystem
 //! paths here, not in the frontend: this is the only place that knows the
@@ -53,9 +52,7 @@ pub struct Heading {
     pub text: String,
 }
 
-/// Render markdown source rooted at `base_dir` (the document's own
-/// directory, used to resolve relative image/link destinations). Returns
-/// the document plus the absolute paths of every local image it
+/// Returns the document plus the absolute paths of every local image it
 /// references, so the caller can grant asset-protocol scope precisely
 /// rather than for the whole directory.
 pub fn render(source: &str, base_dir: &Path) -> (RenderedDoc, Vec<PathBuf>) {
@@ -106,18 +103,10 @@ pub fn render(source: &str, base_dir: &Path) -> (RenderedDoc, Vec<PathBuf>) {
                 transformed.push(Event::Html(CowStr::from(block_html)));
             }
             Event::Start(Tag::Heading { level, id, classes, attrs }) => {
-                // Buffer inner events only to compute a slug from the
-                // plain text when there's no explicit `{#id}` — the slug
-                // is needed on the *Start* event, which comes before the
-                // text that determines it. Everything buffered here still
-                // flows through the one shared `push_html` call below
-                // (never a separate one): a separate call was the exact
-                // bug this file's module doc warns about, just scoped to
-                // headings — it broke path resolution for images/links
-                // nested in a heading (resolve_event never ran on them)
-                // and footnote numbering for references nested in a
-                // heading (a second HtmlWriter means a second, wrong,
-                // footnote counter).
+                // Buffered events still flow through the one shared
+                // push_html call below — a separate call here shipped
+                // once, breaking nested image/link resolution and
+                // footnote numbering for anything nested in a heading.
                 let mut inner: Vec<Event> = Vec::new();
                 let mut plain = String::new();
                 for inner_event in parser.by_ref() {
@@ -148,10 +137,6 @@ pub fn render(source: &str, base_dir: &Path) -> (RenderedDoc, Vec<PathBuf>) {
                 let anchor_html =
                     format!("<a class=\"anchor\" href=\"#{id_attr}\" aria-hidden=\"true\">#</a>");
 
-                // `classes`/`attrs` (from `{.foo #bar key=val}` syntax,
-                // enabled by ENABLE_HEADING_ATTRIBUTES) pass through
-                // unmodified — pulldown-cmark's own writer renders them,
-                // only `id` needed overriding.
                 transformed.push(Event::Start(Tag::Heading {
                     level,
                     id: Some(CowStr::from(slug)),
@@ -192,15 +177,11 @@ pub fn render(source: &str, base_dir: &Path) -> (RenderedDoc, Vec<PathBuf>) {
     )
 }
 
-/// Rewrites an `Image`/`Link` start event's destination in place if it's a
-/// local relative path (see `resolve_local`), collecting the resolved
-/// path into `assets` for images so the caller can grant asset-protocol
-/// scope to exactly the files a document references. A no-op for every
-/// other event. Shared by the top-level match and the heading-inner-event
-/// loop so there's exactly one place this logic lives — headings buffer
-/// their content separately (to compute a slug before re-emitting the
-/// `Start` event) but must apply the identical resolution, or images and
-/// links nested in a heading silently keep their unresolved relative path.
+/// Shared by the top-level match and the heading-inner-event loop so
+/// there's exactly one place this logic lives — headings buffer their
+/// content separately (to compute a slug before re-emitting the `Start`
+/// event) but must apply the identical resolution, or images/links nested
+/// in a heading silently keep their unresolved relative path.
 fn resolve_event<'a>(event: Event<'a>, base_dir: &Path, assets: &mut Vec<PathBuf>) -> Event<'a> {
     match event {
         Event::Start(Tag::Image { link_type, dest_url, title, id }) => {
@@ -225,10 +206,6 @@ fn resolve_event<'a>(event: Event<'a>, base_dir: &Path, assets: &mut Vec<PathBuf
     }
 }
 
-/// Resolve `dest` to an absolute filesystem path if it's a same-machine
-/// relative/absolute path (no URI scheme, not an in-page `#anchor`).
-/// Returns `None` for anything that should be left untouched: external
-/// URLs, `mailto:`/`tel:` links, and page-local anchors.
 fn resolve_local(base_dir: &Path, dest: &str) -> Option<PathBuf> {
     if dest.is_empty() || dest.starts_with('#') || has_scheme(dest) {
         return None;
@@ -249,9 +226,6 @@ fn resolve_local(base_dir: &Path, dest: &str) -> Option<PathBuf> {
     )
 }
 
-/// `RFC 3986`-style scheme detection (`scheme:`), enough to tell a URL
-/// (`https://…`, `mailto:…`) apart from a filesystem path — including a
-/// Windows drive letter, which is not a scheme despite the colon.
 fn has_scheme(s: &str) -> bool {
     let mut chars = s.char_indices();
     match chars.next() {
@@ -348,11 +322,8 @@ fn highlight_code_block(code: &str, lang: &str) -> String {
     format!("<pre class=\"code-block code\"{lang_class}><code>{body}</code></pre>\n")
 }
 
-/// CSS classes syntect/mermaid/katex depend on, layered onto ammonia's
-/// otherwise-conservative default allowlist. `class`/`id` cover syntect's
-/// scope spans and our own heading anchors; `input` + its attributes cover
-/// GFM task-list checkboxes. Mermaid and KaTeX output is injected
-/// client-side after this point and never passes through here.
+/// Mermaid and KaTeX output is injected client-side after this point and
+/// never passes through here.
 fn sanitize(html: &str) -> String {
     ammonia::Builder::default()
         .add_tags(["input"]) // GFM task-list checkboxes
@@ -360,17 +331,12 @@ fn sanitize(html: &str) -> String {
         .add_tag_attributes("input", ["type", "checked", "disabled"])
         .add_tag_attributes("a", ["aria-hidden"])
         .add_tag_attributes("pre", ["data-lang"])
-        // pulldown-cmark's own GFM table-alignment output — its only
-        // source of `style` in our HTML. Mermaid/KaTeX render
-        // client-side and never pass through this sanitizer, so `style`
-        // is intentionally not allowed anywhere else — and even on
-        // td/th the *value* is filtered to `text-align` alone. Without
-        // `filter_style_properties`, ammonia passes the declaration
-        // block through verbatim (`style_properties: None` is its
-        // default), so raw `<td style="position:fixed;inset:0;
-        // background:url(https://…)">` in a document would paint over
-        // the whole window and beacon out. Only ever widen this list
-        // for a property pulldown-cmark itself emits.
+        // `style` is allowed only here, and only `text-align` survives:
+        // ammonia's default (`style_properties: None`) passes a style
+        // block through verbatim, so raw `<td style="position:fixed;
+        // inset:0;background:url(https://…)">` would paint over the
+        // window and beacon out. Only widen this for a property
+        // pulldown-cmark itself emits.
         .add_tag_attributes("td", ["style"])
         .add_tag_attributes("th", ["style"])
         .filter_style_properties(["text-align"].into_iter().collect())
@@ -415,7 +381,6 @@ mod tests {
         assert!(doc.html.contains("<strong>bold</strong>"));
         assert!(doc.html.contains("<a href=\"https://example.com\""));
         assert!(doc.html.contains("<code>code</code>"));
-        // The plain-text projection (TOC/slug/title) still has the text.
         assert_eq!(doc.headings[0].text, "A bold link code");
     }
 
@@ -491,17 +456,13 @@ mod tests {
 
     #[test]
     fn style_on_table_cells_is_filtered_to_text_align() {
-        // Raw HTML cell with a hostile style block plus a legitimate
-        // alignment: only text-align may survive.
         let doc = r("<table><tr><td style=\"position:fixed;inset:0;text-align:center;background:url(https://evil/px)\">a</td></tr></table>");
         assert!(doc.html.contains("text-align"), "{}", doc.html);
         assert!(!doc.html.contains("position"), "{}", doc.html);
         assert!(!doc.html.contains("background"), "{}", doc.html);
         assert!(!doc.html.contains("evil"), "{}", doc.html);
-        // GFM alignment (pulldown-cmark's own style output) still works.
         let doc = r("| a | b |\n|:--|--:|\n| 1 | 2 |");
         assert!(doc.html.replace(' ', "").contains("text-align:left"), "{}", doc.html);
-        // style is not allowed on any other tag at all.
         let doc = r("<div style=\"text-align:center\">x</div>");
         assert!(!doc.html.contains("style="), "{}", doc.html);
     }
@@ -512,7 +473,6 @@ mod tests {
         for needle in ["data:", "file:", "vbscript:", "javascript:", "jAvAsCrIpT:", "passwd", "msgbox"] {
             assert!(!doc.html.contains(needle), "{needle} survived: {}", doc.html);
         }
-        // Ordinary web links are untouched.
         let doc = r("[ok](https://example.com/x)");
         assert!(doc.html.contains("href=\"https://example.com/x\""));
     }
@@ -551,14 +511,10 @@ mod tests {
         assert_eq!(assets, vec![PathBuf::from("/tmp/mdreader-test/docs/img/pic.png")]);
     }
 
-    // Documents the intended (and security-relevant) behavior: relative
-    // destinations are NOT confined to the document's directory — a
-    // link may resolve above base_dir. The mitigation for "link points
-    // at something the OS would execute" is entirely on the frontend
-    // side (app.js's openWithSystem: extension denylist + confirmation
-    // dialog showing the resolved absolute path), plus lib.rs's
-    // Rust-side extension checks on every path-taking command. If this
-    // test ever needs to flip to "confined," those layers still stand.
+    // Intentional: relative destinations are NOT confined to the
+    // document's directory. The mitigation lives on the frontend
+    // (openWithSystem's denylist + confirm dialog) and in lib.rs's
+    // Rust-side extension checks, not here.
     #[test]
     fn relative_links_may_escape_base_dir() {
         let (doc, _assets) = render("[up](../../outside.md)", Path::new("/tmp/mdreader-test/a/b"));
@@ -602,14 +558,10 @@ mod tests {
     #[test]
     fn footnote_reference_inside_heading_numbers_correctly() {
         let doc = r("First.[^a]\n\n## Section[^b]\n\n[^a]: one\n[^b]: two");
-        // [^a] appears first in document order, so it must be footnote 1
-        // and [^b] (inside the heading) must be 2 — not both "1", which
-        // is what a second, isolated HtmlWriter for the heading would
-        // produce (its own numbering starts fresh). Reference href is the
-        // raw label (`#a`/`#b`), not a synthesized id — confirmed against
-        // pulldown-cmark's html.rs FootnoteReference handling.
-        // `rel="noopener noreferrer"` is ammonia's own addition on every
-        // anchor (link_rel), present in the real rendered output.
+        // [^a] must be footnote 1 and [^b] (inside the heading) must be
+        // 2 — not both "1", which a second, isolated HtmlWriter for the
+        // heading would produce. href is the raw label (`#a`/`#b`), not a
+        // synthesized id; `rel="noopener noreferrer"` is ammonia's own.
         assert!(doc.html.contains("footnote-definition-label\">1</sup>"));
         assert!(doc.html.contains("footnote-definition-label\">2</sup>"));
         assert!(doc.html.contains(
@@ -644,14 +596,9 @@ mod tests {
         assert!(!doc.html.contains("onclick"));
     }
 
-    // ---------------------------------------------------------------
-    // Live-preview-specific coverage. `render_markdown` (lib.rs) calls
-    // `render()` on every debounced keystroke, which means it now runs
-    // against source states nobody would ever save: empty buffers,
-    // unclosed fences, half-typed tables. These tests exist because that
-    // usage pattern is new — `render()` itself is unchanged, but its
-    // input distribution is not.
-    // ---------------------------------------------------------------
+    // Live-preview coverage: `render()` is unchanged, but `render_markdown`
+    // (lib.rs) now calls it on every debounced keystroke, so it runs
+    // against source states nobody would ever save.
 
     #[test]
     fn empty_source_renders_an_empty_document() {
@@ -665,10 +612,8 @@ mod tests {
 
     #[test]
     fn nonexistent_base_dir_does_not_panic() {
-        // The untitled-document case: `render_markdown` falls back to
-        // `std::env::current_dir()` when a tab has no path yet, but
-        // nothing guarantees that directory (or any base_dir) exists at
-        // the moment of a given render — render() must tolerate it.
+        // The untitled-document case: render_markdown falls back to
+        // current_dir(), which isn't guaranteed to exist either.
         let doc = render_at("# Hello\n\n![x](missing.png)", "/tmp/mdreader-test-does-not-exist");
         assert!(doc.html.contains("Hello"));
     }
@@ -676,9 +621,6 @@ mod tests {
     #[test]
     fn partial_markdown_states_do_not_panic() {
         // Every one of these is a plausible mid-keystroke buffer state.
-        // The assertion is just "renders and sanitizes without
-        // panicking" — that's the entire risk profile live preview adds,
-        // since render() now runs on inputs nobody would ever save.
         let partial_inputs = [
             "|a|",
             "| a | b |\n|---",
@@ -698,8 +640,6 @@ mod tests {
         ];
         for source in partial_inputs {
             let doc = r(source);
-            // sanitize() must still have run — no raw <script>, no matter
-            // how malformed the input.
             assert!(!doc.html.contains("<script"), "input {source:?} leaked into html unsanitized");
         }
     }
@@ -740,13 +680,9 @@ mod tests {
     #[test]
     #[ignore] // run explicitly: `cargo test --release -- --ignored render_timing`
     fn render_timing_on_realistic_documents() {
-        // No benchmark harness exists in this crate (no dev-dependencies
-        // at all) — this is a dependency-free stand-in, not a
-        // replacement for a real one. Run with `--release`; debug-profile
-        // timings from syntect/ammonia aren't representative. Exists to
-        // sanity-check the ~200ms live-preview debounce in app.js: if
-        // p95 here starts approaching that, the debounce (or a fence-
-        // highlight cache) needs revisiting.
+        // Dependency-free timing stand-in (no dev-dependencies exist in
+        // this crate). Run with --release; sanity-checks against the
+        // ~200ms live-preview debounce in app.js.
         let fixture = std::fs::read_to_string(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../fixtures/large.md"),
         )
@@ -768,8 +704,6 @@ mod tests {
             p50,
             p95
         );
-        // Not a hard assertion — this is a visibility tool, not a gate.
-        // A real regression should be caught by a human reading the
-        // eprintln output, not by flaking CI on shared/slow runners.
+        // Not a hard assertion — a human reads the eprintln output.
     }
 }

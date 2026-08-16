@@ -1,10 +1,8 @@
 //! The app's native menu bar. Hand-built rather than `tauri::menu::Menu::default()`,
 //! for two reasons verified against the `tauri`/`muda` crate sources:
 //!
-//! - `Menu::default()`'s File submenu is `#[cfg(not(any(target_os = "linux",
-//!   target_os = "dragonfly", target_os = "freebsd", target_os = "netbsd",
-//!   target_os = "openbsd")))]` — there is no File submenu on Linux at all.
-//!   This app needs New/Open/Save on every desktop platform.
+//! - `Menu::default()`'s File submenu doesn't exist on Linux at all, and
+//!   this app needs New/Open/Save on every desktop platform.
 //! - `Menu::default()`'s File and Window submenus both carry
 //!   `PredefinedMenuItem::close_window`, which `muda` gives the Cmd+W
 //!   accelerator on macOS. AppKit resolves menu key equivalents before the
@@ -13,19 +11,12 @@
 //!   keydown handler) and close the whole window instead. `close_window` is
 //!   deliberately omitted from every submenu below — don't add it back.
 //!
-//! Quit is a **custom** menu item, not `PredefinedMenuItem::quit`. Traced
-//! through the crate sources: `muda`'s macOS predefined Quit sends
-//! `terminate:` to `NSApp`; `tao`'s `NSApplicationDelegate` implements only
-//! `applicationWillTerminate`, never `applicationShouldTerminate`, so there
-//! is no veto point; `tauri-runtime-wry` produces `RunEvent::ExitRequested`
-//! from exactly two places (a window-destroyed event, and
-//! `AppHandle::exit`/`restart`) — neither reachable from `terminate:`. So
-//! the predefined item would terminate the process with no interceptable
-//! event at all, bypassing the unsaved-changes quit sequence entirely. A
-//! custom item routes through `handle` below like every other menu action,
-//! into the same `menu-action` event the frontend already listens for.
-//! (Secondary reasons: the predefined item's accelerator is macOS-only, and
-//! GTK's `muda` backend drops the predefined Quit item outright.)
+//! Quit is a **custom** menu item, not `PredefinedMenuItem::quit`: muda's
+//! macOS predefined Quit sends `terminate:` directly to `NSApp`, which has
+//! no interceptable `RunEvent` at all, bypassing the unsaved-changes quit
+//! sequence entirely. The custom item instead routes through `handle` below
+//! like every other menu action, into the same `menu-action` event the
+//! frontend already listens for.
 
 #[cfg(not(target_os = "macos"))]
 use tauri::menu::HELP_SUBMENU_ID;
@@ -50,9 +41,6 @@ pub fn build<R: Runtime>(handle: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         ..Default::default()
     };
 
-    // Custom quit item, present in the macOS App submenu and (with its own
-    // separator) at the bottom of File elsewhere — see the module doc for
-    // why this can't be `PredefinedMenuItem::quit`.
     let quit = MenuItem::with_id(handle, QUIT, "Quit mdreader", true, Some("CmdOrCtrl+Q"))?;
 
     let file_menu = Submenu::with_items(
@@ -144,9 +132,6 @@ pub fn build<R: Runtime>(handle: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     )
 }
 
-/// Forwards a menu click to the frontend as a plain string id, alongside
-/// the existing `files-pending` event — `app.js` dispatches on it the same
-/// way it already dispatches on that one.
 pub fn handle<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
     let _ = app.emit("menu-action", event.id().0.clone());
 }

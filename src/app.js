@@ -1,9 +1,3 @@
-// mdreader frontend. No framework, no bundler — this file plus index.html
-// and styles.css is the entire UI. Markdown -> HTML, and all path
-// resolution for relative images/links, happens in Rust (see
-// src-tauri/src/render.rs); this file wires up tabs, TOC, find, and
-// lazy-loads mermaid/KaTeX only for documents that need them.
-//
 // `withGlobalTauri` injects window.__TAURI__ as an initialization script
 // that runs before any document script, so it's read synchronously below
 // — there is nothing to poll or wait for.
@@ -38,14 +32,6 @@ const els = {
 };
 
 const state = {
-  // { kind, path, title, headings, hasMermaid, hasMath, rendered, paneEl,
-  //   previewEl, contentEl, mode, source, savedSource, dirty, editor,
-  //   editorEl, splitterEl, previewTimer, saving }
-  // See createTabShell (the shared shape) and enterSplitMode (edit-mode
-  // fields). `path` is null for a brand-new, never-saved document — see
-  // newDocument. `kind` is "document" for every ordinary tab, or
-  // "welcome" for a browser-style "New Tab" page — see newWelcomeTab and
-  // buildWelcomePane.
   tabs: [],
   activeIndex: -1,
 };
@@ -54,10 +40,9 @@ const inFlight = new Set(); // paths currently being opened, for openPaths' dedu
 const find = { currentIndex: -1 };
 const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
 
-/// Extensions this app is registered to handle (from tauri.conf.json's
-/// bundle.fileAssociations via the `markdown_extensions` command) — the
-/// one thing a link click needs to decide "open as a document" vs "hand
-/// to the OS", fetched once rather than hand-duplicated here.
+/// Extensions this app is registered to handle, fetched once from
+/// tauri.conf.json via the `markdown_extensions` command rather than
+/// hand-duplicated here.
 let markdownExtensions = new Set();
 
 function basename(path) {

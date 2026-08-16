@@ -1,4 +1,3 @@
-/* ---------- design tokens ---------- */
 :root {
   --bg: #ffffff;
   --bg-elevated: #f6f7f8;
@@ -13,10 +12,8 @@
   --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
 }
 
-/* Dark theme override. `data-theme` is always explicitly "light" or
-   "dark" (see app.js's `themePreference`/`applyTheme`) — there's no
-   OS-follow "system" mode, so this is the only theme-switching rule
-   needed alongside the light defaults in :root above. */
+/* `data-theme` is always explicitly "light" or "dark" — no OS-follow
+   mode — so this is the only override needed alongside :root above. */
 :root[data-theme="dark"] {
   --bg: #1b1e23;
   --bg-elevated: #22262c;
@@ -44,7 +41,6 @@ html, body {
   overflow: hidden;
 }
 
-/* ---------- tab bar ---------- */
 .tabbar-row {
   display: flex;
   align-items: stretch;
@@ -53,13 +49,10 @@ html, body {
   flex: 0 0 auto;
 }
 
-/* flex-grow: 0, not 1 — the strip should hug its tabs' own width (so the
-   "+" button sits right after the last tab, browser-tab-style) rather
-   than stretching to fill the row. flex-shrink stays 1 (with min-width:0)
-   so once tabs *do* overflow the available width, this still shrinks and
-   scrolls internally instead of pushing "+"/.tabbar-controls off-screen —
-   see .tabbar-controls' margin-left:auto below for how the leftover space
-   this no longer claims gets used instead. */
+/* flex: 0 1 auto — hugs the tabs' own width (browser-tab-style, so "+"
+   sits right after the last tab) but still shrinks and scrolls
+   internally once tabs overflow, instead of pushing later controls
+   off-screen. */
 .tabbar {
   display: flex;
   align-items: stretch;
@@ -74,10 +67,7 @@ html, body {
   gap: 2px;
   padding: 0 6px;
   flex: 0 0 auto;
-  /* Standard flex idiom for "pin the last item to the row's far edge":
-     absorbs whatever width .tabbar no longer force-claims, so this group
-     stays flush right regardless of how many tabs are open. */
-  margin-left: auto;
+  margin-left: auto; /* absorbs whatever width .tabbar no longer claims */
   border-left: 1px solid var(--border);
 }
 
@@ -116,23 +106,17 @@ html, body {
   color: var(--accent);
 }
 
-/* display, not visibility: Edit and Save read as one tight pair, so a
-   reserved-but-invisible Save slot between them (the visibility:hidden
-   approach) looked like Edit had drifted away from its neighbors. Theme
-   shifts a few px when Save appears/disappears — an accepted trade-off,
-   see updateSaveButton in app.js. */
+/* display, not visibility — a reserved-but-invisible Save slot made Edit
+   look like it had drifted from its neighbors. Accepted trade-off: the
+   toolbar shifts a few px when Save appears/disappears. */
 .icon-btn.is-hidden {
   display: none;
 }
 
-/* Sits between the scrollable .tabbar and the fixed .tabbar-controls —
-   outside renderTabBar's wipe target and outside .tabbar's own
-   overflow-x:auto region, so it can never scroll away with an overflowing
-   tab strip and never needs sticky positioning to stay put. align-self
-   overrides .tabbar-row's own align-items:stretch — without it this sits
-   flex-start (top-aligned) instead of centered like the buttons inside
-   .tabbar-controls, since .icon-btn gives it an explicit height and a
-   stretch container doesn't re-center a non-stretching definite-size item. */
+/* Outside .tabbar's own overflow-x:auto region, so it can't scroll away
+   with an overflowing tab strip. align-self overrides .tabbar-row's
+   align-items:stretch, which would otherwise top-align this instead of
+   centering it like the buttons in .tabbar-controls. */
 #new-tab-btn {
   flex: 0 0 auto;
   align-self: center;
@@ -191,7 +175,6 @@ html, body {
   background: rgba(128, 128, 128, 0.25);
 }
 
-/* ---------- layout ---------- */
 .body {
   flex: 1 1 auto;
   display: flex;
@@ -241,24 +224,18 @@ html, body {
 .toc a.level-5,
 .toc a.level-6 { padding-left: 52px; }
 
-/* This wraps the empty-state placeholder plus one .tab-pane per open
-   tab — see index.html's comment on #content-wrap. It does not itself
-   scroll: each tab's .preview-scroll (and, in split mode, .editor-pane)
-   is its own independent scroll container, because a split editor/
-   preview layout needs the two sides to scroll separately. That's a
-   deliberate change from the single shared scroller this used to be —
-   the TOC IntersectionObserver root and the tab-bar dirty logic both
-   depend on scrolling now happening per-tab, not on this element. */
+/* Does not itself scroll: each tab's .preview-scroll (and, in split
+   mode, .editor-pane) is its own independent scroll container, so the
+   two sides of a split can scroll separately. The TOC
+   IntersectionObserver root depends on scrolling happening per-tab. */
 .content-wrap {
   flex: 1 1 auto;
   position: relative;
   overflow: hidden;
 }
 
-/* Per-tab pane: holds the editor (split mode only) and the preview side
-   by side. Persistent for the tab's lifetime, same rationale as the old
-   single .content element — recreating this per activation would break
-   the "mermaid/KaTeX render once" invariant this app relies on. */
+/* Persistent for the tab's lifetime — recreating this per activation
+   would break the "mermaid/KaTeX render once" invariant. */
 .tab-pane {
   display: none;
   height: 100%;
@@ -268,25 +245,20 @@ html, body {
   display: flex;
 }
 
-/* Created lazily on first entry into split mode and left in the DOM
-   after that (never destroyed) so toggling back to view-only and back
-   to split again is free — same "create once, keep alive" approach as
-   the tab's own contentEl. Hidden via display:none rather than removed
-   whenever the tab isn't in split mode. */
+/* Created lazily on first entry into split mode, never destroyed after
+   — toggling back to view-only and back to split again is free. */
 .editor-pane,
 .pane-splitter {
   display: none;
 }
 
 .tab-pane.split .editor-pane {
-  /* Flex column, not block: the formatting toolbar (.editor-toolbar) is
-     a fixed-height row above CodeMirror's own wrapper div — both are
-     children of .editor-pane, in that DOM order (see
-     createEditorToolbar's comment in app.js for why order matters).
-     flex-basis is --split-ratio (a percent, set by attachSplitterDrag in
-     app.js) rather than a fixed 50% — flex-grow:0 so this side never
-     grows past the ratio JS set; see .preview-scroll below for the other
-     half of this pairing. */
+  /* Flex column: .editor-toolbar is a fixed-height row above CodeMirror's
+     wrapper, both children of .editor-pane in that DOM order (app.js's
+     createEditorToolbar depends on this order). flex-basis is
+     --split-ratio, set by attachSplitterDrag in app.js — grow:0 so this
+     side never grows past the ratio JS set (see .preview-scroll below
+     for the other half of this pairing). */
   display: flex;
   flex-direction: column;
   flex: 0 1 var(--split-ratio, 50%);
@@ -297,11 +269,9 @@ html, body {
 }
 
 /* Paired with .editor-pane's flex-basis above: the editor takes the
-   explicit --split-ratio basis and the preview takes whatever's left via
-   a zero basis + grow:1. Sizing only one side this way is what keeps the
-   two from ever disagreeing about the total once the 6px splitter is
-   subtracted. The base .preview-scroll rule further down still carries
-   flex: 1 1 50% for view-only mode, where it's the pane's only child. */
+   explicit --split-ratio basis, the preview takes whatever's left via a
+   zero basis + grow:1. Sizing only one side is what keeps the two from
+   disagreeing about the total once the 6px splitter is subtracted. */
 .tab-pane.split .preview-scroll {
   flex: 1 1 0;
 }
@@ -315,10 +285,9 @@ html, body {
   touch-action: none; /* a pointer drag here is a resize, not a scroll gesture */
 }
 
-/* A 6px strip is thin to hit precisely. Widen the *interactive* area to
-   ~16px with a transparent overlay while leaving the visible seam at 6px
-   — the alternative (a wider visible strip) would read as a UI element
-   rather than a seam between panes. */
+/* Widens the *interactive* area to ~16px while leaving the visible seam
+   at 6px — a wider visible strip would read as a UI element rather than
+   a seam between panes. */
 .tab-pane.split .pane-splitter::before {
   content: "";
   position: absolute;
@@ -333,10 +302,9 @@ html, body {
   background: var(--accent);
 }
 
-/* Set on <body> by attachSplitterDrag (app.js) only for the duration of a
-   splitter drag, so dragging fast past the divider doesn't flicker the
-   cursor back to a text I-beam over the editor, and text elsewhere on the
-   page doesn't get selected as the pointer crosses it mid-drag. */
+/* Set on <body> by attachSplitterDrag only for the drag's duration, so
+   dragging fast past the divider doesn't flicker the cursor back to a
+   text I-beam, and text elsewhere doesn't get selected mid-drag. */
 body.is-splitting {
   cursor: col-resize;
   user-select: none;
@@ -351,12 +319,9 @@ body.is-splitting {
   flex: 0 0 auto;
   background: var(--bg-elevated);
   border-bottom: 1px solid var(--border);
-  /* 14 buttons across 3 groups doesn't fit at this app's own configured
-     minWidth (tauri.conf.json) once the editor pane is halved by the
-     split — same problem the tab bar already solves for itself
-     (.tabbar, above), so reuse its answer rather than wrapping (which
-     would take unpredictable vertical space from the editor) or
-     shrinking buttons illegibly. */
+  /* 14 buttons don't fit once the editor pane is halved by the split —
+     scroll horizontally rather than wrap (unpredictable vertical space)
+     or shrink buttons illegibly. */
   overflow-x: auto;
   flex-wrap: nowrap;
 }
@@ -369,11 +334,9 @@ body.is-splitting {
   flex: 0 0 auto;
 }
 
-/* CodeMirror sizing: a flex item alongside .editor-toolbar now, not the
-   sole content of .editor-pane — flex: 1 1 auto takes the remaining
-   space after the toolbar; min-height: 0 is what lets CodeMirror's own
-   internal scroller handle overflow instead of this item growing past
-   its container (same reason .body has it elsewhere in this file). */
+/* min-height: 0 lets CodeMirror's own internal scroller handle overflow
+   instead of this item growing past its container (same flex-overflow
+   trap .body guards against above). */
 .editor-pane .CodeMirror {
   flex: 1 1 auto;
   min-height: 0;
@@ -382,8 +345,6 @@ body.is-splitting {
   line-height: 1.55;
 }
 
-/* The scroll container for a tab's rendered preview — was .content-wrap
-   itself before the split-pane layout; see the comment above. */
 .preview-scroll {
   flex: 1 1 50%;
   min-width: 0;
@@ -392,9 +353,8 @@ body.is-splitting {
   position: relative;
 }
 
-/* In split mode the preview no longer has the full window width to
-   itself, so the 780px reading column (set on .content below) would
-   leave a big empty margin in a half-width pane. */
+/* In split mode the 780px reading column (below) would leave a big
+   empty margin in a half-width pane. */
 .tab-pane.split .content {
   max-width: none;
   padding: 32px 28px 96px;
@@ -413,9 +373,6 @@ body.is-splitting {
 
 .empty-state .hint { font-size: 13px; }
 
-/* .empty-state itself is a column (see above) — this row wraps Open File…
-   and Create side by side without disturbing that, since app.js owns
-   #empty-state's own inline display and can't be repurposed as a row. */
 .empty-actions {
   display: flex;
   gap: 8px;
@@ -432,12 +389,9 @@ body.is-splitting {
   font-family: inherit;
   color: #fff;
   background: var(--accent);
-  /* Transparent, not none: .open-btn.secondary below has a real 1px
-     border, and with no explicit height on either variant that 2px would
-     otherwise make secondary buttons taller than primary ones sitting
-     right next to them (Open File… vs Create, Save vs Don't Save/Cancel).
-     Reserving the same width here keeps every primary/secondary pair the
-     same height. */
+  /* Transparent, not none: reserves the same 1px .open-btn.secondary
+     spends on a real border, so primary/secondary pairs stay equal
+     height (Open File… vs Create, Save vs Don't Save/Cancel). */
   border: 1px solid transparent;
   border-radius: 8px;
   cursor: pointer;
@@ -446,9 +400,6 @@ body.is-splitting {
 .open-btn:hover { filter: brightness(1.08); }
 .open-btn:active { filter: brightness(0.95); }
 
-/* Ghost variant — used wherever a button needs to sit next to a primary
-   .open-btn without competing with it (Create next to Open File…, and
-   the Don't Save/Cancel buttons in the unsaved-changes modal). */
 .open-btn.secondary {
   color: var(--text);
   background: transparent;
@@ -458,22 +409,13 @@ body.is-splitting {
 .open-btn.secondary:hover { filter: none; background: var(--accent-weak); }
 .open-btn.secondary:active { filter: none; background: var(--border); }
 
-/* Create's outline picks up Open File…'s fill color, pairing a solid
-   primary CTA with a matching accent-outlined secondary one. Scoped to
-   .empty-actions (not .open-btn.secondary generally) so it covers every
-   place this same Open File…/Create screen appears — the global
-   zero-tabs empty state and every welcome tab's cloned pane alike —
-   without recoloring the modal's Don't Save/Cancel, which share the same
-   base classes but shouldn't visually claim equal weight with Save. */
+/* Scoped to .empty-actions, not .open-btn.secondary generally, so it
+   doesn't also recolor the modal's Don't Save/Cancel — those share the
+   same base classes but shouldn't visually claim equal weight with Save. */
 .empty-actions .open-btn.secondary {
   border-color: var(--accent);
 }
 
-/* ---------- rendered markdown ---------- */
-/* No display:none/.visible toggle here — visibility is owned by the
-   ancestor .tab-pane's .visible class now (see the split-pane layout
-   above). This element itself is always block once its ancestors let it
-   show through. */
 .content {
   max-width: 780px;
   margin: 0 auto;
@@ -483,14 +425,11 @@ body.is-splitting {
   line-height: 1.65;
 }
 
-/* A welcome tab's contentEl holds a cloned .empty-state instead of
-   rendered markdown (see buildWelcomePane in app.js) — .empty-state's own
-   height:100% needs a definite-height ancestor to center against, and
-   .content's default height is auto (it just grows with prose), so
-   without this override the welcome screen would render top-aligned
-   instead of centered. Removed by convertWelcomeTab before this tab ever
-   gets real rendered HTML — left in place it would break that document's
-   normal reading-column width and padding. */
+/* A welcome tab's contentEl holds a cloned .empty-state (buildWelcomePane
+   in app.js), whose height:100% needs a definite-height ancestor to
+   center against — .content's default height is auto, so without this
+   the welcome screen renders top-aligned instead of centered. Removed by
+   convertWelcomeTab before real rendered HTML ever lands here. */
 .content.welcome {
   height: 100%;
   max-width: none;
@@ -607,7 +546,6 @@ body.is-splitting {
   white-space: pre-wrap;
 }
 
-/* ---------- find bar ---------- */
 .findbar {
   display: none;
   position: absolute;
@@ -652,35 +590,20 @@ body.is-splitting {
   min-width: 3.5em;
 }
 
-/* ---------- CodeMirror theme ----------
-   Two theme layers, applied simultaneously (enterSplitMode's `theme:
-   "mdreader mdreader-syntax"` in app.js — CodeMirror supports multiple
-   space-separated theme names as distinct classes on the same wrapper),
-   with deliberately disjoint selectors so neither fights the other over
-   which rule wins:
-
-   - This block (`cm-s-mdreader`) owns editor *chrome* — background,
-     base text, gutters, cursor, selection — plus markdown-*structural*
-     tokens (headers, emphasis, links, quotes, list nesting), bridged to
-     this file's own custom properties so it follows the light/dark
-     blocks at the top of this file automatically, and reads as part of
-     this app rather than an embedded foreign editor. Background is
-     `--bg-elevated`, not `--bg`, so the editor pane is visibly distinct
-     from the preview pane next to it.
-   - `cm-s-mdreader-syntax` (generated — see build.rs's
-     generate_codemirror_theme_css) owns *code*-token colors (keyword,
-     string, number, comment-inside-a-fence, ...), derived from the same
-     syntect theme the read-only preview uses, so a document's fence
-     colors look the same whether you're viewing or editing it.
+/* Two CodeMirror theme layers applied simultaneously (enterSplitMode's
+   `theme: "mdreader mdreader-syntax"` in app.js), with deliberately
+   disjoint selectors so neither fights the other over which rule wins.
+   This block (`cm-s-mdreader`) owns editor chrome plus markdown-
+   structural tokens; `cm-s-mdreader-syntax` (generated by build.rs's
+   generate_codemirror_theme_css, from the same syntect theme the
+   read-only preview uses) owns code-token colors only.
 
    Three token classes are markdown.js's own reuse of CodeMirror's
-   limited shared vocabulary for non-code purposes, so they're owned
-   here, not by the generated theme, even though a "real" language mode
-   would also use them: `cm-comment` is markdown.js's class for inline
-   `` `code` `` spans (not just real comments), `cm-variable-2` is its
-   class for nested list markers, and `cm-tag` covers raw HTML embedded
-   in markdown prose. build.rs's generate_codemirror_theme_css
-   deliberately does not emit rules for these three. */
+   shared vocabulary for non-code purposes, so they're owned here, not
+   by the generated theme: `cm-comment` is inline `` `code` `` spans,
+   `cm-variable-2` is nested list markers, `cm-tag` is raw HTML embedded
+   in prose. generate_codemirror_theme_css deliberately emits no rules
+   for these three — don't add any there. */
 .cm-s-mdreader.CodeMirror {
   background: var(--bg-elevated);
   color: var(--text);
@@ -719,7 +642,6 @@ body.is-splitting {
 .cm-s-mdreader .cm-variable-2 { color: var(--text); }
 .cm-s-mdreader .cm-tag { color: var(--text); }
 
-/* ---------- drag & drop ---------- */
 .drop-overlay {
   display: none;
   position: fixed;
@@ -736,10 +658,6 @@ body.is-splitting {
 
 .drop-overlay.visible { display: flex; }
 
-/* ---------- unsaved-changes modal ----------
-   The app's first custom modal (see confirmUnsaved in app.js) — native
-   tauri.dialog.confirm only offers two buttons, and Save/Don't Save/Cancel
-   needs three. Popover recipe borrowed from .findbar above. */
 .modal-backdrop {
   display: none;
   position: fixed;

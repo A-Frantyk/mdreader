@@ -286,6 +286,27 @@ instead of launching your new one.
   on the first header cell), and footnote-number reuse (numbering always
   increments off the highest existing `[^n]:` definition, never recycles a
   deleted one's number).
+- **`extraKeys` bindings must be built through `app.js`'s `editorKeyName`
+  (used by `EDITOR_SHORTCUTS`/`editorExtraKeys`), never hand-written with
+  a `"Mod-"` prefix.** CodeMirror 5 looks `extraKeys` up as a raw object
+  property against the name `addModifierNames` builds at keypress time —
+  `"Cmd-B"` on macOS, `"Ctrl-B"` elsewhere, Shift outermost
+  (`"Shift-Cmd-X"`, not `"Cmd-Shift-X"`) — and never runs `extraKeys`
+  through `normalizeKeyMap` (which the library defines and exports but
+  never calls itself). This was a real, shipped bug: this app's
+  Cmd/Ctrl+Bold/Italic/Strikethrough bindings were originally written as
+  `"Mod-B"` etc. and matched nothing for the entire life of the split-mode
+  feature — the toolbar buttons worked, the advertised shortcuts silently
+  didn't. `EDITOR_SHORTCUTS` (`app.js`, next to `TOOLBAR_GROUPS`) is the
+  full current set — Bold/Italic/Strikethrough, Link (Cmd/Ctrl+K), Inline
+  code (+Shift+C), Blockquote (+Shift+.), and Heading 1–6/paragraph
+  (Cmd/Ctrl+1–6, +0) — and every entry calls a function the toolbar also
+  calls, which is what keeps "only real Markdown syntax `render.rs`
+  renders" true by construction rather than by convention. Cmd/Ctrl+N
+  (native menu accelerator → `newWelcomeTab`) and Cmd/Ctrl+W (`app.js`'s
+  keydown handler → `closeTab` → `confirmClosable` → the shared
+  Save/Don't Save/Cancel modal) were both already correct before this and
+  needed no change.
 - Fence-language resolution goes through `mode/meta.js`'s alias table,
   which is missing a couple of short forms this project's own fixtures
   don't hit but real documents might — notably no `"py"` alias for Python

@@ -1054,22 +1054,30 @@ function toggleLinePrefix(cm, testRe, makePrefix, { stripOtherListMarkers = fals
   cm.focus();
 }
 
-/// Cycles the current line through ATX heading levels: # -> ## -> ... ->
-/// ###### -> (none) -> # -> ... Operates on the selection's first line
-/// only — a heading is inherently single-line (CommonMark's ATX syntax is
-/// one #-prefixed line), so a multi-line selection heading-ifying every
-/// line isn't the expected behavior.
-function cycleHeading(cm) {
+/// Sets the current line's ATX heading level (0 = plain paragraph).
+/// Selection's first line only — a heading is inherently single-line
+/// (CommonMark's ATX syntax is one #-prefixed line), so a multi-line
+/// selection heading-ifying every line isn't the expected behavior.
+/// Shared by the toolbar's cycling H button (cycleHeading, below) and the
+/// Cmd/Ctrl+1..6 / +0 shortcuts (EDITOR_SHORTCUTS), which need to jump
+/// straight to a level rather than step through it.
+function setHeading(cm, level) {
   const line = cm.getCursor("from").line;
   const text = cm.getLine(line);
   const match = text.match(/^(#{1,6})\s+/);
-  const level = match ? match[1].length : 0;
   const stripped = match ? text.slice(match[0].length) : text;
-  const nextLevel = level >= 6 ? 0 : level + 1;
-  const newText = nextLevel === 0 ? stripped : "#".repeat(nextLevel) + " " + stripped;
+  const newText = level === 0 ? stripped : "#".repeat(level) + " " + stripped;
   cm.replaceRange(newText, { line, ch: 0 }, { line, ch: text.length });
   cm.setCursor({ line, ch: newText.length });
   cm.focus();
+}
+
+/// Cycles the current line through ATX heading levels: # -> ## -> ... ->
+/// ###### -> (none) -> # -> ...
+function cycleHeading(cm) {
+  const match = cm.getLine(cm.getCursor("from").line).match(/^(#{1,6})\s+/);
+  const level = match ? match[1].length : 0;
+  setHeading(cm, level >= 6 ? 0 : level + 1);
 }
 
 /// Shared shape for Link/Image: build a template from the current
@@ -1169,6 +1177,52 @@ function insertFootnote(cm) {
   cm.focus();
 }
 
+/// CodeMirror 5 looks `extraKeys` up as a raw object property against the
+/// name it builds in addModifierNames — "Cmd-B" on macOS, "Ctrl-B"
+/// elsewhere, with Shift outermost ("Shift-Cmd-X", not "Cmd-Shift-X").
+/// There is deliberately no "Mod-" alias to lean on: extraKeys is never
+/// run through normalizeKeyMap (which the library defines and exports but
+/// never calls itself, confirmed by grepping lib/codemirror.js — only
+/// those two references exist), and normalizeKeyName would throw on
+/// "Mod" if it somehow were. This was a real, shipped bug — this app's
+/// Cmd/Ctrl+B/I/Shift+X bindings were written as "Mod-B" etc. and matched
+/// nothing for the entire life of the split-mode feature, silently
+/// falling through to CodeMirror's own (unrelated or absent) bindings.
+/// Ask CodeMirror which platform keymap it actually resolved to, rather
+/// than re-sniffing navigator.platform ourselves, so this can't drift
+/// from the map extraKeys will really be looked up against.
+function editorKeyName(key, shift = false) {
+  const CM = window.CodeMirror;
+  const mac = CM.keyMap.default === CM.keyMap.macDefault;
+  return `${shift ? "Shift-" : ""}${mac ? "Cmd-" : "Ctrl-"}${key}`;
+}
+
+/// Cmd/Ctrl shortcuts available while the editor has focus (extraKeys —
+/// a view-only tab never sees these). Every entry reuses an action
+/// function the toolbar already calls below, which is what keeps the
+/// constraint "only real Markdown syntax render.rs renders" automatic —
+/// nothing here can produce output the toolbar couldn't already produce.
+/// Deliberately no underline binding, same reason as the toolbar: no
+/// Markdown syntax for it (see CLAUDE.md).
+const EDITOR_SHORTCUTS = [
+  { key: "B", action: (cm) => wrapSelection(cm, "**") },
+  { key: "I", action: (cm) => wrapSelection(cm, "*") },
+  { key: "X", shift: true, action: (cm) => wrapSelection(cm, "~~") },
+  { key: "K", action: insertLink },
+  { key: "C", shift: true, action: (cm) => wrapSelection(cm, "`") },
+  { key: ".", shift: true, action: (cm) => toggleLinePrefix(cm, /^>\s?/, () => "> ") },
+  ...[1, 2, 3, 4, 5, 6].map((n) => ({ key: String(n), action: (cm) => setHeading(cm, n) })),
+  { key: "0", action: (cm) => setHeading(cm, 0) },
+];
+
+function editorExtraKeys() {
+  const map = {};
+  for (const { key, shift, action } of EDITOR_SHORTCUTS) {
+    map[editorKeyName(key, shift)] = action;
+  }
+  return map;
+}
+
 /// Three groups, rendered with a divider between them (see
 /// createEditorToolbar): inline styles, line-level block markers, and
 /// template insertions. Every control here is real syntax this app's own
@@ -1187,11 +1241,15 @@ const TOOLBAR_GROUPS = [
       style: "text-decoration:line-through",
       action: (cm) => wrapSelection(cm, "~~"),
     },
-    { label: "</>", title: "Inline code", action: (cm) => wrapSelection(cm, "`") },
+    { label: "</>", title: "Inline code (Cmd/Ctrl+Shift+C)", action: (cm) => wrapSelection(cm, "`") },
   ],
   [
-    { label: "H", title: "Heading (cycles H1–H6)", action: cycleHeading },
-    { label: "❝", title: "Blockquote", action: (cm) => toggleLinePrefix(cm, /^>\s?/, () => "> ") },
+    { label: "H", title: "Heading (cycles H1–H6; Cmd/Ctrl+1–6 sets a level, +0 clears)", action: cycleHeading },
+    {
+      label: "❝",
+      title: "Blockquote (Cmd/Ctrl+Shift+.)",
+      action: (cm) => toggleLinePrefix(cm, /^>\s?/, () => "> "),
+    },
     {
       label: "•",
       title: "Bullet list",
@@ -1210,7 +1268,7 @@ const TOOLBAR_GROUPS = [
     },
   ],
   [
-    { label: "🔗", title: "Link", action: insertLink },
+    { label: "🔗", title: "Link (Cmd/Ctrl+K)", action: insertLink },
     { label: "🖼", title: "Image", action: insertImage },
     { label: "―", title: "Horizontal rule", action: insertHorizontalRule },
     { label: "▦", title: "Table", action: insertTable },
@@ -1326,17 +1384,12 @@ async function enterSplitMode(tab) {
         theme: "mdreader mdreader-syntax",
         lineWrapping: true,
         lineNumbers: true,
-        // "Mod-" is CodeMirror's own cross-platform modifier alias
-        // (verified against lib/codemirror.js's keymap normalization —
-        // Cmd on macOS, Ctrl on Windows/Linux from one binding). These
-        // only fire while the editor itself has focus, unlike the app's
-        // global keydown handler, so they can't collide with Cmd/Ctrl+F
-        // or +W firing from the find input or elsewhere.
-        extraKeys: {
-          "Mod-B": (instance) => wrapSelection(instance, "**"),
-          "Mod-I": (instance) => wrapSelection(instance, "*"),
-          "Mod-Shift-X": (instance) => wrapSelection(instance, "~~"),
-        },
+        // See EDITOR_SHORTCUTS/editorKeyName above for why this can't be
+        // a hand-written "Mod-B"-style literal. These only fire while the
+        // editor itself has focus, unlike the app's global keydown
+        // handler, so they can't collide with Cmd/Ctrl+F or +W firing
+        // from the find input or elsewhere.
+        extraKeys: editorExtraKeys(),
       });
     } catch (err) {
       toolbar.remove();
@@ -1379,7 +1432,7 @@ function attachSplitterDrag(tab, splitter) {
     if (rect.width <= 0) return;
     // Clamp in pixels, not percent: a percentage floor would still let
     // both sides collapse to an uselessly narrow column on a small
-    // window, and the editor toolbar (13 buttons, .editor-toolbar's
+    // window, and the editor toolbar (14 buttons, .editor-toolbar's
     // overflow-x) needs a real minimum to stay usable.
     const min = SPLIT_MIN_PANE_PX;
     const max = rect.width - SPLIT_MIN_PANE_PX;

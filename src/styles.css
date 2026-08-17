@@ -8,6 +8,9 @@
   --accent-weak: #e8edfb;
   --danger: #c0392b;
   --code-bg: #f6f7f8;
+  --editor-bg: #faf8f3;
+  --editor-chrome: #f5f2ea;
+  --editor-grid: rgba(60, 50, 30, 0.06);
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
 }
@@ -23,6 +26,9 @@
   --accent: #6d93ea;
   --accent-weak: #26314a;
   --code-bg: #22262c;
+  --editor-bg: #212227;
+  --editor-chrome: #1d1e23;
+  --editor-grid: rgba(255, 250, 240, 0.05);
 }
 
 * { box-sizing: border-box; }
@@ -317,7 +323,7 @@ body.is-splitting {
   gap: 2px;
   padding: 4px 6px;
   flex: 0 0 auto;
-  background: var(--bg-elevated);
+  background: var(--editor-chrome);
   border-bottom: 1px solid var(--border);
   /* 14 buttons don't fit once the editor pane is halved by the split —
      scroll horizontally rather than wrap (unpredictable vertical space)
@@ -605,12 +611,22 @@ body.is-splitting {
    in prose. generate_codemirror_theme_css deliberately emits no rules
    for these three — don't add any there. */
 .cm-s-mdreader.CodeMirror {
-  background: var(--bg-elevated);
+  background-color: var(--editor-bg);
+  /* Stationary, not scrolling with the text: .CodeMirror-scroll is
+     transparent and sits above this wrapper, so the grid can't shimmer or
+     force a repaint while typing. Putting it on .CodeMirror-lines instead
+     would scroll with the text but stop at the last line, leaving a visible
+     cutoff on short documents. Size is decorative, deliberately not locked
+     to the computed line-box height (13.5px * 1.55 below) — a stationary
+     grid drifts out of phase with the text regardless, so matching it would
+     only look like a near-miss. */
+  background-image: radial-gradient(var(--editor-grid) 1px, transparent 1px);
+  background-size: 22px 22px;
   color: var(--text);
 }
 
 .cm-s-mdreader .CodeMirror-gutters {
-  background: var(--bg-elevated);
+  background: var(--editor-chrome);
   border-right: 1px solid var(--border);
 }
 
@@ -626,10 +642,6 @@ body.is-splitting {
 .cm-s-mdreader .CodeMirror-line::selection,
 .cm-s-mdreader .CodeMirror-line > span::selection {
   background: var(--accent-weak);
-}
-
-.cm-s-mdreader .CodeMirror-activeline-background {
-  background: var(--bg);
 }
 
 .cm-s-mdreader .cm-header { color: var(--accent); font-weight: 600; }

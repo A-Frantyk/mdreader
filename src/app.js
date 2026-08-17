@@ -572,16 +572,16 @@ async function openWithSystem(href) {
 }
 
 // A resolved local link carries data-path, not href (see rewriteImageSources'
-// comment above) — route those first and skip straight to openPaths/
-// openWithSystem. Everything left on href is either an in-page #anchor, an
-// external/mailto/tel URL, or a raw <a href> the document wrote itself in
-// literal HTML (never touched by render.rs's resolution, since it isn't
-// markdown link syntax) — same handling as before this change for all three.
-function activateLocalLink(a) {
-  if (markdownExtensions.has(extOf(a.dataset.path))) {
-    openPaths([a.dataset.path]);
+// comment above), but everything downstream of "we have a local filesystem
+// path" is one decision regardless of which attribute it came from — this is
+// also the click handler's own href fallback for a raw <a href> the document
+// wrote itself in literal HTML (never touched by render.rs's resolution,
+// since it isn't markdown link syntax).
+function activateLocalPath(path) {
+  if (markdownExtensions.has(extOf(path))) {
+    openPaths([path]);
   } else {
-    openWithSystem(a.dataset.path);
+    openWithSystem(path);
   }
 }
 
@@ -596,7 +596,7 @@ els.contentWrap.addEventListener("click", (e) => {
   e.preventDefault();
 
   if (a.dataset.path) {
-    activateLocalLink(a);
+    activateLocalPath(a.dataset.path);
     return;
   }
 
@@ -615,11 +615,7 @@ els.contentWrap.addEventListener("click", (e) => {
     tauri.opener.openUrl(href).catch((err) => console.error("failed to open url", err));
     return;
   }
-  if (markdownExtensions.has(extOf(href))) {
-    openPaths([href]);
-  } else {
-    openWithSystem(href);
-  }
+  activateLocalPath(href);
 });
 
 // role="link" tabindex="0" (render.rs) makes a data-path <a> focusable, same
@@ -630,7 +626,7 @@ els.contentWrap.addEventListener("keydown", (e) => {
   const a = e.target.closest("a[data-path]");
   if (!a) return;
   e.preventDefault();
-  activateLocalLink(a);
+  activateLocalPath(a.dataset.path);
 });
 
 els.toc.addEventListener("click", (e) => {

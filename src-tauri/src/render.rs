@@ -115,37 +115,23 @@ pub fn render(source: &str, base_dir: &Path) -> (RenderedDoc, Vec<PathBuf>) {
                 while let Some(inner_event) = parser.next() {
                     match inner_event {
                         Event::End(TagEnd::Heading(_)) => break,
-                        Event::Text(t) => {
-                            plain.push_str(&t);
-                            inner.push(Event::Text(t));
-                        }
-                        Event::Code(t) => {
-                            plain.push_str(&t);
-                            inner.push(Event::Code(t));
-                        }
                         // A local image's alt text is drained by
-                        // resolve_local_image itself (see below), so it
-                        // can't reach the Text arm above the way it does
-                        // for a non-local image — fold it into `plain`
+                        // resolve_image_event itself (see below), so it
+                        // can't reach the Text/Code arm below the way it
+                        // does for a non-local image — fold it into `plain`
                         // here instead, to keep contributing to the
                         // heading's slug/TOC text either way.
-                        Event::Start(Tag::Image { link_type, dest_url, title, id: img_id }) => {
-                            match resolve_local(base_dir, &dest_url) {
-                                Some(path) => {
-                                    let (ev, alt) =
-                                        resolve_local_image(&title, &mut parser, &mut assets, path);
-                                    plain.push_str(&alt);
-                                    inner.push(ev);
-                                }
-                                None => inner.push(Event::Start(Tag::Image {
-                                    link_type,
-                                    dest_url,
-                                    title,
-                                    id: img_id,
-                                })),
-                            }
+                        Event::Start(tag @ Tag::Image { .. }) => {
+                            let (ev, alt) = resolve_image_event(tag, base_dir, &mut parser, &mut assets);
+                            plain.push_str(&alt);
+                            inner.push(ev);
                         }
-                        other => inner.push(resolve_event(other, base_dir)),
+                        other => {
+                            if let Event::Text(t) | Event::Code(t) = &other {
+                                plain.push_str(t);
+                            }
+                            inner.push(resolve_event(other, base_dir));
+                        }
                     }
                 }
                 let level_num = level as u8;
@@ -178,14 +164,9 @@ pub fn render(source: &str, base_dir: &Path) -> (RenderedDoc, Vec<PathBuf>) {
                 transformed.extend(inner);
                 transformed.push(Event::End(TagEnd::Heading(level)));
             }
-            Event::Start(Tag::Image { link_type, dest_url, title, id }) => {
-                match resolve_local(base_dir, &dest_url) {
-                    Some(path) => {
-                        let (ev, _alt) = resolve_local_image(&title, &mut parser, &mut assets, path);
-                        transformed.push(ev);
-                    }
-                    None => transformed.push(Event::Start(Tag::Image { link_type, dest_url, title, id })),
-                }
+            Event::Start(tag @ Tag::Image { .. }) => {
+                let (ev, _alt) = resolve_image_event(tag, base_dir, &mut parser, &mut assets);
+                transformed.push(ev);
             }
             Event::Start(Tag::Link { .. }) => {
                 transformed.push(resolve_event(event, base_dir));
@@ -214,11 +195,17 @@ pub fn render(source: &str, base_dir: &Path) -> (RenderedDoc, Vec<PathBuf>) {
     )
 }
 
-/// Shared by the top-level match and the heading-inner-event loop so
-/// there's exactly one place this logic lives — headings buffer their
-/// content separately (to compute a slug before re-emitting the `Start`
-/// event) but must apply the identical resolution, or images/links nested
-/// in a heading silently keep their unresolved relative path.
+/// Appends ` name="escaped(value)"` to `html` — the one shape both
+/// `resolve_event`'s `<a>` and `resolve_image_event`'s `<img>` builders need
+/// repeatedly (`data-path`, `alt`, `title`).
+fn push_attr(html: &mut String, name: &str, value: &str) {
+    html.push(' ');
+    html.push_str(name);
+    html.push_str("=\"");
+    let _ = escape_into(&mut *html, value);
+    html.push('"');
+}
+
 // Local link/image destinations deliberately do NOT flow into `href=`/`src=`
 // — see the "Path resolution stays in Rust" invariant in CLAUDE.md. Ammonia
 // applies URL semantics to those attributes, and a resolved Windows path
@@ -228,23 +215,23 @@ pub fn render(source: &str, base_dir: &Path) -> (RenderedDoc, Vec<PathBuf>) {
 // through byte-for-byte on every platform. resolve_local already returns
 // None for anything external/anchored/scheme'd, so those keep flowing
 // through pulldown-cmark's normal `href=`/`src=` output untouched.
+/// Handles `Tag::Link` only — `Tag::Image` needs its alt text drained too
+/// (see `resolve_image_event`), which an `Event -> Event` shape can't do.
 fn resolve_event<'a>(event: Event<'a>, base_dir: &Path) -> Event<'a> {
     match event {
         Event::Start(Tag::Link { link_type, dest_url, title, id }) => {
             match resolve_local(base_dir, &dest_url) {
                 Some(path) => {
-                    let mut html = String::from("<a data-path=\"");
-                    let _ = escape_into(&mut html, &path.to_string_lossy());
+                    let mut html = String::from("<a");
+                    push_attr(&mut html, "data-path", &path.to_string_lossy());
                     // role/tabindex restore what a plain `<a href>` gets for
                     // free — keyboard focus and a pointer cursor — since an
                     // <a> with no href is otherwise inert to both. See
                     // app.js's contentWrap keydown handler for the Enter/
                     // Space side of this.
-                    html.push_str("\" role=\"link\" tabindex=\"0\"");
+                    html.push_str(" role=\"link\" tabindex=\"0\"");
                     if !title.is_empty() {
-                        html.push_str(" title=\"");
-                        let _ = escape_into(&mut html, &title);
-                        html.push('"');
+                        push_attr(&mut html, "title", &title);
                     }
                     html.push('>');
                     Event::Html(CowStr::from(html))
@@ -253,6 +240,28 @@ fn resolve_event<'a>(event: Event<'a>, base_dir: &Path) -> Event<'a> {
             }
         }
         other => other,
+    }
+}
+
+/// Resolves a `Tag::Image` Start event — shared by the top-level match and
+/// the heading-inner-event loop so there's exactly one place this logic
+/// lives, same reasoning as `resolve_event`. A local destination is fully
+/// built here (see `resolve_local_image`); anything else is re-emitted
+/// unchanged, and its alt-text/End events are left for the caller's own
+/// loop to pick up on its next iteration, same as before this function
+/// existed.
+fn resolve_image_event<'a>(
+    tag: Tag<'a>,
+    base_dir: &Path,
+    parser: &mut Parser<'a>,
+    assets: &mut Vec<PathBuf>,
+) -> (Event<'a>, String) {
+    let Tag::Image { ref dest_url, ref title, .. } = tag else {
+        unreachable!("resolve_image_event is only ever called with Tag::Image")
+    };
+    match resolve_local(base_dir, dest_url) {
+        Some(path) => resolve_local_image(title, parser, assets, path),
+        None => (Event::Start(tag), String::new()),
     }
 }
 
@@ -273,12 +282,11 @@ fn resolve_event<'a>(event: Event<'a>, base_dir: &Path) -> Event<'a> {
 /// document is unaffected — it still goes through the single shared
 /// push_html call at the end of render().
 fn resolve_local_image<'a>(
-    title: &CowStr<'a>,
+    title: &str,
     parser: &mut Parser<'a>,
     assets: &mut Vec<PathBuf>,
     path: PathBuf,
 ) -> (Event<'a>, String) {
-    assets.push(path.clone());
     let mut alt = String::new();
     let mut nest = 0i32;
     while let Some(event) = parser.next() {
@@ -295,15 +303,14 @@ fn resolve_local_image<'a>(
             _ => {}
         }
     }
-    let mut html = String::from("<img data-path=\"");
-    let _ = escape_into(&mut html, &path.to_string_lossy());
-    html.push_str("\" alt=\"");
-    let _ = escape_into(&mut html, &alt);
+    let mut html = String::from("<img");
+    push_attr(&mut html, "data-path", &path.to_string_lossy());
+    push_attr(&mut html, "alt", &alt);
     if !title.is_empty() {
-        html.push_str("\" title=\"");
-        let _ = escape_into(&mut html, title);
+        push_attr(&mut html, "title", title);
     }
-    html.push_str("\" />");
+    html.push_str(" />");
+    assets.push(path);
     (Event::Html(CowStr::from(html)), alt)
 }
 
@@ -467,12 +474,15 @@ mod tests {
         if cfg!(windows) { PathBuf::from(r"C:\mdreader-test") } else { PathBuf::from("/tmp/mdreader-test") }
     }
 
-    fn tdir(rel: &str) -> PathBuf {
-        let mut p = test_base_dir();
+    fn join_rel(mut root: PathBuf, rel: &str) -> PathBuf {
         for seg in rel.split('/').filter(|s| !s.is_empty()) {
-            p.push(seg);
+            root.push(seg);
         }
-        p
+        root
+    }
+
+    fn tdir(rel: &str) -> PathBuf {
+        join_rel(test_base_dir(), rel)
     }
 
     // A path outside test_base_dir() entirely — for asserting that an
@@ -482,11 +492,7 @@ mod tests {
     // drive prefix), which would silently exercise the base_dir.join()
     // branch instead of the "kept as-is" branch this is meant to test.
     fn abs(rel: &str) -> PathBuf {
-        let mut p = if cfg!(windows) { PathBuf::from(r"C:\") } else { PathBuf::from("/") };
-        for seg in rel.split('/').filter(|s| !s.is_empty()) {
-            p.push(seg);
-        }
-        p
+        join_rel(if cfg!(windows) { PathBuf::from(r"C:\") } else { PathBuf::from("/") }, rel)
     }
 
     fn r(source: &str) -> RenderedDoc {
@@ -683,7 +689,7 @@ mod tests {
 
     #[test]
     fn percent_decodes_relative_paths() {
-        let (_doc, assets) = render("![](my%20image.png)", &test_base_dir());
+        let (_doc, assets) = r_with_assets("![](my%20image.png)");
         assert_eq!(assets, vec![tdir("my image.png")]);
     }
 

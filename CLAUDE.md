@@ -23,6 +23,18 @@ planned; `#[cfg_attr(mobile, ...)]` in `lib.rs`/`main.rs` is inert
 | `src/vendor/` | Mermaid + KaTeX + CodeMirror 5, vendored (no CDN, no npm dependency at runtime). Don't add a bundler to manage these. |
 | `fixtures/demo.md` | Exercises every rendering feature (tables, task lists, code, mermaid, math, footnotes, raw HTML) — use it to sanity-check rendering changes. |
 
+## Comment discipline
+
+Default to no comment — code should read clearly from naming and structure
+alone. Add one only when it carries information the code itself can't: *why*
+a non-obvious choice was made, a constraint from outside this file (an
+OS/library/framework quirk), or a historical footgun ("this was a real,
+shipped bug") — the kind already throughout the Invariants section below and
+`render.rs`/`lib.rs`/`app.js`. Never add a comment that just restates what
+the next line does; if a comment only explains *what*, delete it or rename
+something instead. This is guidance for new code, not a mandate to strip
+existing rationale comments as a side effect of an unrelated change.
+
 ## Invariants — why these exist, don't casually change them
 
 - **One `push_html` call per document, in `render.rs`.** `pulldown_cmark`'s

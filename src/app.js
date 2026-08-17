@@ -512,14 +512,15 @@ function updateToc(tab) {
   });
 }
 
-// render.rs already resolved every relative image/link destination to an
-// absolute filesystem path — classification here is just "does this look
-// like a path or a URL", never path arithmetic.
+// render.rs already resolved every local image destination to an absolute
+// filesystem path and put it in data-path, never src — see the
+// path-resolution invariant in CLAUDE.md for why (ammonia applies URL rules
+// to src=, and a Windows path like C:\... parses as URL scheme "c" and gets
+// silently dropped). A remote or data-URI <img> never gets a data-path, so
+// this is a pure attribute-presence check, not path arithmetic.
 function rewriteImageSources(root) {
-  root.querySelectorAll("img[src]").forEach((img) => {
-    const src = img.getAttribute("src");
-    if (!src || src.startsWith("data:") || src.includes("://")) return;
-    img.src = tauri.core.convertFileSrc(src);
+  root.querySelectorAll("img[data-path]").forEach((img) => {
+    img.src = tauri.core.convertFileSrc(img.dataset.path);
   });
 }
 
@@ -570,17 +571,37 @@ async function openWithSystem(href) {
   await tauri.opener.openPath(href).catch((err) => console.error("failed to open path", err));
 }
 
+// A resolved local link carries data-path, not href (see rewriteImageSources'
+// comment above) — route those first and skip straight to openPaths/
+// openWithSystem. Everything left on href is either an in-page #anchor, an
+// external/mailto/tel URL, or a raw <a href> the document wrote itself in
+// literal HTML (never touched by render.rs's resolution, since it isn't
+// markdown link syntax) — same handling as before this change for all three.
+function activateLocalLink(a) {
+  if (markdownExtensions.has(extOf(a.dataset.path))) {
+    openPaths([a.dataset.path]);
+  } else {
+    openWithSystem(a.dataset.path);
+  }
+}
+
 // Delegated once on the shared container rather than per-link per-render:
 // tabs' content persists, so this fires for every tab without rebinding.
 // In-page `#anchor` clicks are handled here too (not left to the browser)
 // because every open tab's headings live in the same document at once —
 // default fragment navigation can't tell which tab's heading you meant.
 els.contentWrap.addEventListener("click", (e) => {
-  const a = e.target.closest("a[href]");
+  const a = e.target.closest("a[href], a[data-path]");
   if (!a) return;
+  e.preventDefault();
+
+  if (a.dataset.path) {
+    activateLocalLink(a);
+    return;
+  }
+
   const href = a.getAttribute("href");
   if (!href) return;
-  e.preventDefault();
 
   if (href.startsWith("#")) {
     const tab = state.tabs[state.activeIndex];
@@ -599,6 +620,17 @@ els.contentWrap.addEventListener("click", (e) => {
   } else {
     openWithSystem(href);
   }
+});
+
+// role="link" tabindex="0" (render.rs) makes a data-path <a> focusable, same
+// as a real href would — but an <a> with no href fires no native "click"
+// activation on Enter/Space, so that has to be replicated here explicitly.
+els.contentWrap.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" && e.key !== " ") return;
+  const a = e.target.closest("a[data-path]");
+  if (!a) return;
+  e.preventDefault();
+  activateLocalLink(a);
 });
 
 els.toc.addEventListener("click", (e) => {

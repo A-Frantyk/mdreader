@@ -48,15 +48,29 @@ existing rationale comments as a side effect of an unrelated change.
   `push_html` exactly once at the end. Any change to the rendering pipeline
   must preserve "one writer for the whole document."
 
-- **Path resolution stays in Rust, not JavaScript.** `render.rs` resolves
-  every relative image/link destination to an absolute filesystem path
-  (using `std::path`, which has real Windows/POSIX semantics) and grants
-  the asset-protocol scope for exactly the image files it found. The
-  frontend never joins paths or sniffs separators — it only classifies an
-  already-resolved string as "looks like a URL" vs "looks like a path"
-  (see `rewriteImageSources` / the click handler in `app.js`). If you find
-  yourself adding `.split('/')`-style path logic to `app.js`, stop — it
-  belongs in `render.rs`.
+- **Path resolution stays in Rust, not JavaScript — and a resolved path
+  lives in `data-path`, never `src`/`href`.** `render.rs` resolves every
+  relative image/link destination to an absolute filesystem path (using
+  `std::path`, which has real Windows/POSIX semantics) and grants the
+  asset-protocol scope for exactly the image files it found. It emits that
+  path into a `data-path` attribute (see `resolve_event` / `resolve_local_image`),
+  not `src`/`href` — ammonia applies URL semantics to those, and a resolved
+  Windows path (`C:\Users\...`) parses as URL scheme `c`, which isn't in
+  ammonia's scheme allowlist, so the whole attribute is silently dropped.
+  This was a real, shipped bug: every local image and local link was dead
+  on Windows, hidden by Rust unit tests that hardcoded POSIX-only base dirs
+  (`render.rs`'s test module now builds paths through `tdir`/`abs` helpers
+  so this is covered cross-platform). `sanitize()`'s ammonia builder
+  allowlists `data-path` (plus `role`/`tabindex`, needed because an `<a>`
+  with no `href` gets neither keyboard focus nor a pointer cursor for free)
+  scoped to `img`/`a` specifically — don't widen it to `add_generic_attributes`.
+  The frontend never joins paths or sniffs separators — `rewriteImageSources`
+  and the click handler in `app.js` just read `data-path` off the element
+  and hand it to `convertFileSrc`/`openPaths`/`openWithSystem` verbatim. If
+  you find yourself adding `.split('/')`-style path logic to `app.js`, stop
+  — it belongs in `render.rs`. External/anchor/scheme'd destinations are
+  unaffected: `resolve_local` returns `None` for those, so they keep
+  flowing through pulldown-cmark's normal `href=`/`src=` output.
 
 - **File-open events are a hint, not the payload.** Tauri creates the
   `main` window from `tauri.conf.json` *before* running `.setup()` or
@@ -293,10 +307,14 @@ instead of launching your new one.
   a render (per debounced keystroke in split mode). Hang, not crash —
   `panic = "abort"` only matters for real panics, and there are no
   `unwrap`s on the render hot path. Cap/timeout is a possible follow-up.
-- On Windows, a link/image whose resolved path falls back to
-  `lexically_normalize` comes out as `C:\...`, which ammonia parses as
-  URL scheme `c` and drops — a functional (not security) bug, untested
-  on a real Windows machine.
+- Fixed: local links/images used to die on Windows (`C:\...` in `src=`/
+  `href=` parsed by ammonia as URL scheme `c` and dropped) — see the
+  path-resolution invariant above for the `data-path` fix. Covered by
+  cross-platform Rust unit tests (`render.rs`'s `tdir`/`abs` test helpers)
+  and by Windows CI (`.github/workflows/build.yml`'s `check` job), but
+  still not verified in a real Windows GUI — CI proves the attribute
+  survives sanitization with a drive letter, not that the Tauri asset
+  protocol renders that path in a Windows webview.
 - "New Document" (`newDocument` in `app.js`) creates an untitled,
   never-saved tab (`tab.path === null` until a successful save); its first
   Cmd/Ctrl+S goes through `saveTabAs`/`save_markdown_file_as` instead of

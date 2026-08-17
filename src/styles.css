@@ -478,6 +478,12 @@ body.is-splitting {
 
 .content a { color: var(--accent); }
 
+/* A resolved local link (render.rs's data-path, not href — see CLAUDE.md's
+   path-resolution invariant) carries no href, so it gets no pointer cursor
+   for free the way a normal <a href> does. role="link" tabindex="0"
+   (also render.rs) restores keyboard focus; this restores the cursor. */
+.content a[data-path] { cursor: pointer; }
+
 .content img, .content svg { max-width: 100%; }
 
 .content blockquote {

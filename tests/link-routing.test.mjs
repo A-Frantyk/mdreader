@@ -81,8 +81,12 @@ test("#content-wrap click routing", async (t) => {
       openWithSystemCalled = true;
     };
 
+    // Local links carry data-path, not href — render.rs never puts a
+    // resolved filesystem path in href= (see CLAUDE.md's path-resolution
+    // invariant: ammonia would apply URL rules to it and, on Windows,
+    // silently drop it as an unrecognized "c" scheme).
     const link = window.document.createElement("a");
-    link.href = "/resolved/absolute/other.md";
+    link.dataset.path = "/resolved/absolute/other.md";
     window.document.getElementById("content-wrap").appendChild(link);
     click(link);
 
@@ -105,12 +109,36 @@ test("#content-wrap click routing", async (t) => {
     };
 
     const link = window.document.createElement("a");
-    link.href = "/resolved/absolute/notes.txt";
+    link.dataset.path = "/resolved/absolute/notes.txt";
     window.document.getElementById("content-wrap").appendChild(link);
     click(link);
 
     assert.equal(openWithSystemCalledWith, "/resolved/absolute/notes.txt");
     assert.equal(openPathsCalled, false);
+  });
+
+  await t.test("a Windows-style resolved path round-trips untouched", () => {
+    // The regression this whole data-path channel exists for: render.rs
+    // resolves a Windows destination to something like C:\Users\a\pic.md.
+    // That value must reach openPaths/openWithSystem byte-for-byte — no
+    // separator rewriting, no URL parsing — the same way it would on any
+    // other platform. This is provable on macOS because app.js never
+    // interprets the string, only reads the attribute.
+    const { window } = freshApp();
+    window.__testExports.markdownExtensions = new Set(["md"]);
+    makeActiveTab({ window, app: window.__testExports });
+
+    let openPathsCalledWith = null;
+    window.openPaths = (paths) => {
+      openPathsCalledWith = paths;
+    };
+
+    const link = window.document.createElement("a");
+    link.dataset.path = "C:\\Users\\a\\notes.md";
+    window.document.getElementById("content-wrap").appendChild(link);
+    click(link);
+
+    assert.deepEqual(structuredClone(openPathsCalledWith), ["C:\\Users\\a\\notes.md"]);
   });
 });
 
@@ -176,12 +204,25 @@ test("rewriteImageSources", async (t) => {
   await t.test("rewrites a resolved local path through convertFileSrc", () => {
     const { window, tauri } = freshApp();
     const root = window.document.createElement("div");
-    root.innerHTML = '<img src="/resolved/absolute/pic.png">';
+    root.innerHTML = '<img data-path="/resolved/absolute/pic.png">';
     window.rewriteImageSources(root);
     assert.equal(root.querySelector("img").getAttribute("src"), tauri.core.convertFileSrc("/resolved/absolute/pic.png"));
   });
 
+  await t.test("a Windows-style resolved path round-trips untouched into convertFileSrc", () => {
+    // Same regression coverage as the click-routing suite above: render.rs
+    // resolves a Windows destination to something like C:\Users\a\pic.png,
+    // and that value must reach convertFileSrc byte-for-byte.
+    const { window, tauri } = freshApp();
+    const root = window.document.createElement("div");
+    root.innerHTML = '<img data-path="C:\\Users\\a\\pic.png">';
+    window.rewriteImageSources(root);
+    assert.equal(root.querySelector("img").getAttribute("src"), tauri.core.convertFileSrc("C:\\Users\\a\\pic.png"));
+  });
+
   await t.test("leaves a data: URL untouched", () => {
+    // A remote/data-URI image never gets a data-path from render.rs — no
+    // attribute to select, so rewriteImageSources never touches it.
     const { window } = freshApp();
     const root = window.document.createElement("div");
     root.innerHTML = '<img src="data:image/png;base64,AAAA">';

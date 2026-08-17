@@ -15,7 +15,10 @@
 //! document's directory and has real path semantics (`std::path`, not a
 //! separator-sniffing guess). Images additionally get their resolved path
 //! returned so the caller can grant the webview's asset-protocol scope
-//! access to exactly that file.
+//! access to exactly that file. A resolved path is emitted as `data-path`,
+//! never `src`/`href` — ammonia applies URL semantics to those, and a
+//! Windows path (`C:\...`) parses as URL scheme `c`, silently dropping the
+//! whole attribute. See `resolve_event`'s comment for the full story.
 //!
 //! Mermaid and math are NOT rendered here. We only detect their presence
 //! so the frontend can lazy-load the (heavy) mermaid.js / KaTeX bundles
@@ -109,13 +112,41 @@ pub fn render(source: &str, base_dir: &Path) -> (RenderedDoc, Vec<PathBuf>) {
                 // footnote numbering for anything nested in a heading.
                 let mut inner: Vec<Event> = Vec::new();
                 let mut plain = String::new();
-                for inner_event in parser.by_ref() {
-                    match &inner_event {
+                while let Some(inner_event) = parser.next() {
+                    match inner_event {
                         Event::End(TagEnd::Heading(_)) => break,
-                        Event::Text(t) | Event::Code(t) => plain.push_str(t),
-                        _ => {}
+                        Event::Text(t) => {
+                            plain.push_str(&t);
+                            inner.push(Event::Text(t));
+                        }
+                        Event::Code(t) => {
+                            plain.push_str(&t);
+                            inner.push(Event::Code(t));
+                        }
+                        // A local image's alt text is drained by
+                        // resolve_local_image itself (see below), so it
+                        // can't reach the Text arm above the way it does
+                        // for a non-local image — fold it into `plain`
+                        // here instead, to keep contributing to the
+                        // heading's slug/TOC text either way.
+                        Event::Start(Tag::Image { link_type, dest_url, title, id: img_id }) => {
+                            match resolve_local(base_dir, &dest_url) {
+                                Some(path) => {
+                                    let (ev, alt) =
+                                        resolve_local_image(&title, &mut parser, &mut assets, path);
+                                    plain.push_str(&alt);
+                                    inner.push(ev);
+                                }
+                                None => inner.push(Event::Start(Tag::Image {
+                                    link_type,
+                                    dest_url,
+                                    title,
+                                    id: img_id,
+                                })),
+                            }
+                        }
+                        other => inner.push(resolve_event(other, base_dir)),
                     }
-                    inner.push(resolve_event(inner_event, base_dir, &mut assets));
                 }
                 let level_num = level as u8;
                 let slug = unique_id(
@@ -147,11 +178,17 @@ pub fn render(source: &str, base_dir: &Path) -> (RenderedDoc, Vec<PathBuf>) {
                 transformed.extend(inner);
                 transformed.push(Event::End(TagEnd::Heading(level)));
             }
-            Event::Start(Tag::Image { .. }) => {
-                transformed.push(resolve_event(event, base_dir, &mut assets));
+            Event::Start(Tag::Image { link_type, dest_url, title, id }) => {
+                match resolve_local(base_dir, &dest_url) {
+                    Some(path) => {
+                        let (ev, _alt) = resolve_local_image(&title, &mut parser, &mut assets, path);
+                        transformed.push(ev);
+                    }
+                    None => transformed.push(Event::Start(Tag::Image { link_type, dest_url, title, id })),
+                }
             }
             Event::Start(Tag::Link { .. }) => {
-                transformed.push(resolve_event(event, base_dir, &mut assets));
+                transformed.push(resolve_event(event, base_dir));
             }
             Event::Text(t) if t.contains('$') => {
                 has_math = true;
@@ -182,28 +219,92 @@ pub fn render(source: &str, base_dir: &Path) -> (RenderedDoc, Vec<PathBuf>) {
 /// content separately (to compute a slug before re-emitting the `Start`
 /// event) but must apply the identical resolution, or images/links nested
 /// in a heading silently keep their unresolved relative path.
-fn resolve_event<'a>(event: Event<'a>, base_dir: &Path, assets: &mut Vec<PathBuf>) -> Event<'a> {
+// Local link/image destinations deliberately do NOT flow into `href=`/`src=`
+// — see the "Path resolution stays in Rust" invariant in CLAUDE.md. Ammonia
+// applies URL semantics to those attributes, and a resolved Windows path
+// (`C:\Users\...`) parses as URL scheme `c`, which isn't in ammonia's scheme
+// allowlist — the whole attribute is silently dropped. `data-path` isn't
+// URL-typed, so ammonia (with the tag_attributes allowlist below) passes it
+// through byte-for-byte on every platform. resolve_local already returns
+// None for anything external/anchored/scheme'd, so those keep flowing
+// through pulldown-cmark's normal `href=`/`src=` output untouched.
+fn resolve_event<'a>(event: Event<'a>, base_dir: &Path) -> Event<'a> {
     match event {
-        Event::Start(Tag::Image { link_type, dest_url, title, id }) => {
-            let dest_url = match resolve_local(base_dir, &dest_url) {
-                Some(path) => {
-                    let resolved = CowStr::from(path.to_string_lossy().into_owned());
-                    assets.push(path);
-                    resolved
-                }
-                None => dest_url,
-            };
-            Event::Start(Tag::Image { link_type, dest_url, title, id })
-        }
         Event::Start(Tag::Link { link_type, dest_url, title, id }) => {
-            let dest_url = match resolve_local(base_dir, &dest_url) {
-                Some(path) => CowStr::from(path.to_string_lossy().into_owned()),
-                None => dest_url,
-            };
-            Event::Start(Tag::Link { link_type, dest_url, title, id })
+            match resolve_local(base_dir, &dest_url) {
+                Some(path) => {
+                    let mut html = String::from("<a data-path=\"");
+                    let _ = escape_into(&mut html, &path.to_string_lossy());
+                    // role/tabindex restore what a plain `<a href>` gets for
+                    // free — keyboard focus and a pointer cursor — since an
+                    // <a> with no href is otherwise inert to both. See
+                    // app.js's contentWrap keydown handler for the Enter/
+                    // Space side of this.
+                    html.push_str("\" role=\"link\" tabindex=\"0\"");
+                    if !title.is_empty() {
+                        html.push_str(" title=\"");
+                        let _ = escape_into(&mut html, &title);
+                        html.push('"');
+                    }
+                    html.push('>');
+                    Event::Html(CowStr::from(html))
+                }
+                None => Event::Start(Tag::Link { link_type, dest_url, title, id }),
+            }
         }
         other => other,
     }
+}
+
+/// Builds a complete `<img>` tag for a local (resolved) image destination
+/// and returns it alongside the raw, unescaped alt text — a caller inside a
+/// heading folds that into the heading's own plain-text accumulator (slug +
+/// TOC text), matching how alt text nested in a heading already contributed
+/// via the generic Text/Code accumulation before this function existed.
+///
+/// Drains `parser` to the matching `TagEnd::Image` itself, mirroring
+/// pulldown_cmark::html::HtmlWriter::raw_text's event handling — a local
+/// image bypasses the writer's own `Tag::Image` handling entirely (see
+/// resolve_event's comment above for why `data-path` replaces `src`).
+/// Deliberately not reproduced: FootnoteReference numbering inside alt text
+/// (needs the writer's private counter, out of reach here) and the
+/// TaskListMarker/InlineMath/DisplayMath variants (none occur in practice
+/// inside `![alt](...)`). Footnote numbering everywhere else in the
+/// document is unaffected — it still goes through the single shared
+/// push_html call at the end of render().
+fn resolve_local_image<'a>(
+    title: &CowStr<'a>,
+    parser: &mut Parser<'a>,
+    assets: &mut Vec<PathBuf>,
+    path: PathBuf,
+) -> (Event<'a>, String) {
+    assets.push(path.clone());
+    let mut alt = String::new();
+    let mut nest = 0i32;
+    while let Some(event) = parser.next() {
+        match event {
+            Event::Start(_) => nest += 1,
+            Event::End(_) => {
+                if nest == 0 {
+                    break;
+                }
+                nest -= 1;
+            }
+            Event::Text(t) | Event::Code(t) | Event::InlineHtml(t) => alt.push_str(&t),
+            Event::SoftBreak | Event::HardBreak | Event::Rule => alt.push(' '),
+            _ => {}
+        }
+    }
+    let mut html = String::from("<img data-path=\"");
+    let _ = escape_into(&mut html, &path.to_string_lossy());
+    html.push_str("\" alt=\"");
+    let _ = escape_into(&mut html, &alt);
+    if !title.is_empty() {
+        html.push_str("\" title=\"");
+        let _ = escape_into(&mut html, title);
+    }
+    html.push_str("\" />");
+    (Event::Html(CowStr::from(html)), alt)
 }
 
 fn resolve_local(base_dir: &Path, dest: &str) -> Option<PathBuf> {
@@ -329,7 +430,8 @@ fn sanitize(html: &str) -> String {
         .add_tags(["input"]) // GFM task-list checkboxes
         .add_generic_attributes(["class", "id"]) // syntect scope spans, heading anchors
         .add_tag_attributes("input", ["type", "checked", "disabled"])
-        .add_tag_attributes("a", ["aria-hidden"])
+        .add_tag_attributes("a", ["aria-hidden", "data-path", "role", "tabindex"])
+        .add_tag_attributes("img", ["data-path"])
         .add_tag_attributes("pre", ["data-lang"])
         // `style` is allowed only here, and only `text-align` survives:
         // ammonia's default (`style_properties: None`) passes a style
@@ -353,8 +455,42 @@ mod tests {
         render(source, Path::new(base_dir)).0
     }
 
+    // Windows has no bare-root-without-drive-letter concept the way POSIX
+    // does: a literal "/tmp/mdreader-test" base_dir doesn't panic there
+    // (render() never calls base_dir.is_absolute()), but a *destination*
+    // resolved against it — or asserted against directly in html — must be
+    // built through these two helpers, not a hardcoded POSIX string, or the
+    // resulting `data-path` never matches what render() actually produced.
+    // This is exactly the class of bug that shipped: see the module doc's
+    // note on ammonia dropping `C:\...` attributes entirely.
+    fn test_base_dir() -> PathBuf {
+        if cfg!(windows) { PathBuf::from(r"C:\mdreader-test") } else { PathBuf::from("/tmp/mdreader-test") }
+    }
+
+    fn tdir(rel: &str) -> PathBuf {
+        let mut p = test_base_dir();
+        for seg in rel.split('/').filter(|s| !s.is_empty()) {
+            p.push(seg);
+        }
+        p
+    }
+
+    // A path outside test_base_dir() entirely — for asserting that an
+    // already-absolute destination is collected as-is, not joined onto the
+    // base. Needs its own drive letter on Windows: an absolute POSIX-style
+    // literal like "/definitely/..." is NOT `Path::is_absolute()` there (no
+    // drive prefix), which would silently exercise the base_dir.join()
+    // branch instead of the "kept as-is" branch this is meant to test.
+    fn abs(rel: &str) -> PathBuf {
+        let mut p = if cfg!(windows) { PathBuf::from(r"C:\") } else { PathBuf::from("/") };
+        for seg in rel.split('/').filter(|s| !s.is_empty()) {
+            p.push(seg);
+        }
+        p
+    }
+
     fn r(source: &str) -> RenderedDoc {
-        render_at(source, "/tmp/mdreader-test")
+        render(source, &test_base_dir()).0
     }
 
     #[test]
@@ -506,9 +642,10 @@ mod tests {
 
     #[test]
     fn resolves_relative_image_and_collects_asset() {
-        let (doc, assets) = render("![alt](img/pic.png)", Path::new("/tmp/mdreader-test/docs"));
-        assert!(doc.html.contains("/tmp/mdreader-test/docs/img/pic.png"));
-        assert_eq!(assets, vec![PathBuf::from("/tmp/mdreader-test/docs/img/pic.png")]);
+        let (doc, assets) = render("![alt](img/pic.png)", &tdir("docs"));
+        let expected = tdir("docs/img/pic.png");
+        assert!(doc.html.contains(&format!("data-path=\"{}\"", expected.display())), "{}", doc.html);
+        assert_eq!(assets, vec![expected]);
     }
 
     // Intentional: relative destinations are NOT confined to the
@@ -517,14 +654,16 @@ mod tests {
     // Rust-side extension checks, not here.
     #[test]
     fn relative_links_may_escape_base_dir() {
-        let (doc, _assets) = render("[up](../../outside.md)", Path::new("/tmp/mdreader-test/a/b"));
-        assert!(doc.html.contains("href=\"/tmp/mdreader-test/outside.md\""), "{}", doc.html);
+        let (doc, _assets) = render("[up](../../outside.md)", &tdir("a/b"));
+        let expected = tdir("outside.md");
+        assert!(doc.html.contains(&format!("data-path=\"{}\"", expected.display())), "{}", doc.html);
     }
 
     #[test]
     fn resolves_parent_relative_image() {
-        let (doc, _assets) = render("![alt](../shared/logo.png)", Path::new("/tmp/mdreader-test/docs"));
-        assert!(doc.html.contains("/tmp/mdreader-test/shared/logo.png"));
+        let (doc, _assets) = render("![alt](../shared/logo.png)", &tdir("docs"));
+        let expected = tdir("shared/logo.png");
+        assert!(doc.html.contains(&format!("data-path=\"{}\"", expected.display())), "{}", doc.html);
     }
 
     #[test]
@@ -538,21 +677,24 @@ mod tests {
     #[test]
     fn resolves_relative_markdown_link_to_absolute_path() {
         let doc = r("[other](other.md)");
-        assert!(doc.html.contains("href=\"/tmp/mdreader-test/other.md\""));
+        let expected = tdir("other.md");
+        assert!(doc.html.contains(&format!("data-path=\"{}\"", expected.display())), "{}", doc.html);
     }
 
     #[test]
     fn percent_decodes_relative_paths() {
-        let (_doc, assets) = render("![](my%20image.png)", Path::new("/tmp/mdreader-test"));
-        assert_eq!(assets, vec![PathBuf::from("/tmp/mdreader-test/my image.png")]);
+        let (_doc, assets) = render("![](my%20image.png)", &test_base_dir());
+        assert_eq!(assets, vec![tdir("my image.png")]);
     }
 
     #[test]
     fn resolves_images_and_links_inside_headings() {
         let (doc, assets) = r_with_assets("## ![icon](icon.png) [text](other.md)");
-        assert!(doc.html.contains("src=\"/tmp/mdreader-test/icon.png\""));
-        assert!(doc.html.contains("href=\"/tmp/mdreader-test/other.md\""));
-        assert_eq!(assets, vec![PathBuf::from("/tmp/mdreader-test/icon.png")]);
+        let icon = tdir("icon.png");
+        let other = tdir("other.md");
+        assert!(doc.html.contains(&format!("data-path=\"{}\"", icon.display())), "{}", doc.html);
+        assert!(doc.html.contains(&format!("data-path=\"{}\"", other.display())), "{}", doc.html);
+        assert_eq!(assets, vec![icon]);
     }
 
     #[test]
@@ -580,7 +722,7 @@ mod tests {
     }
 
     fn r_with_assets(source: &str) -> (RenderedDoc, Vec<PathBuf>) {
-        render(source, Path::new("/tmp/mdreader-test"))
+        render(source, &test_base_dir())
     }
 
     #[test]
@@ -782,13 +924,14 @@ mod tests {
         // A destination that doesn't exist on disk forces the
         // lexically_normalize fallback (not canonicalize), so the
         // assertion doesn't depend on this machine's filesystem layout
-        // (e.g. macOS symlinking /etc -> /private/etc).
-        let (doc, assets) = render(
-            "![missing](/definitely/does/not/exist.png)",
-            Path::new("/tmp/mdreader-test/docs"),
-        );
-        assert!(doc.html.contains("src=\"/definitely/does/not/exist.png\""), "{}", doc.html);
-        assert_eq!(assets, vec![PathBuf::from("/definitely/does/not/exist.png")]);
+        // (e.g. macOS symlinking /etc -> /private/etc). The destination is
+        // built via abs(), not tdir() — this test's whole point is that an
+        // already-absolute path is returned unchanged rather than joined
+        // onto base_dir, so it deliberately sits outside test_base_dir().
+        let dest = abs("definitely/does/not/exist.png");
+        let (doc, assets) = render(&format!("![missing]({})", dest.display()), &tdir("docs"));
+        assert!(doc.html.contains(&format!("data-path=\"{}\"", dest.display())), "{}", doc.html);
+        assert_eq!(assets, vec![dest]);
     }
 
     #[test]
@@ -797,8 +940,15 @@ mod tests {
         // ".." has nothing to pop against, so it's silently dropped
         // rather than preserved. Exercised end-to-end (not just here) by
         // relative_links_may_escape_base_dir / resolves_parent_relative_image.
-        assert_eq!(lexically_normalize(Path::new("../x")), PathBuf::from("x"));
-        assert_eq!(lexically_normalize(Path::new("/../x")), PathBuf::from("/x"));
+        // POSIX-only: this pins lexically_normalize's own separator-level
+        // behavior on a hardcoded "/"-rooted input, not end-to-end
+        // rendering (which the two tests above already cover
+        // cross-platform via tdir()).
+        #[cfg(unix)]
+        {
+            assert_eq!(lexically_normalize(Path::new("../x")), PathBuf::from("x"));
+            assert_eq!(lexically_normalize(Path::new("/../x")), PathBuf::from("/x"));
+        }
     }
 
     #[test]

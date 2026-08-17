@@ -13,13 +13,15 @@ planned; `#[cfg_attr(mobile, ...)]` in `lib.rs`/`main.rs` is inert
 
 | File | Owns |
 |---|---|
-| `src-tauri/src/render.rs` | Markdown → sanitized HTML. The core pipeline. Has its own module doc explaining the single-pass design — read it before touching this file. |
-| `src-tauri/src/lib.rs` | The three file-open entry paths, Tauri commands (`open_markdown_file`, `drain_pending_files`, `markdown_extensions`, `read_markdown_source`, `render_markdown`, `save_markdown_file`, `save_markdown_file_as`, `mark_frontend_ready`, `quit_app`), plugin registration, the `on_window_event` close handshake. `AppState`'s doc comment explains the queue-always pattern (and, for `frontend_ready`, the analogous close-handshake race). `render_and_grant` is the shared render+scope-grant tail used by both the file-open path and the live-preview path. |
+| `src-tauri/src/render.rs` + `render/` | Markdown → sanitized HTML. `render.rs` is the single-pass driver — has its own module doc explaining the design, read it before touching any of this. It delegates to submodules: `render/events.rs` (`Tag::Link`/`Tag::Image` → `<a data-path>`/`<img data-path>` HTML), `render/paths.rs` (destination resolution), `render/headings.rs` (slug/id generation), `render/highlight.rs` (syntect fences, `SYNTAX_SET`), `render/sanitize.rs` (the ammonia allowlist). Each submodule's `#[cfg(test)]` tests live in a sibling `tests.rs` (e.g. `render/paths/tests.rs`) rather than inline — a child module reaches its parent's private items through `use super::*` regardless, so this costs no visibility widening. |
+| `src-tauri/src/lib.rs` | The three file-open entry paths, `AppState`, `run()`, plugin registration, the `on_window_event` close handshake. `AppState`'s doc comment explains the queue-always pattern (and, for `frontend_ready`, the analogous close-handshake race). |
+| `src-tauri/src/commands.rs` | The 9 Tauri commands (`open_markdown_file`, `drain_pending_files`, `markdown_extensions`, `read_markdown_source`, `render_markdown`, `save_markdown_file`, `save_markdown_file_as`, `mark_frontend_ready`, `quit_app`). `render_and_grant` is the shared render+scope-grant tail used by both the file-open path and the live-preview path. |
+| `src-tauri/src/files.rs` | Markdown-path validation (`is_markdown_path`/`require_markdown_path`/`normalize_markdown_path`) and the app's one filesystem write, `atomic_write`. |
 | `src-tauri/src/menu.rs` | The native File/Edit/View/Window/Help menu bar and its click handler. Hand-built rather than `tauri::menu::Menu::default()` — see the two menu invariants below for why. |
 | `src-tauri/build.rs` | Generates four CSS files from syntect's bundled themes at compile time: `src/code-theme-{light,dark}.css` (read-only preview) and `src/codemirror-theme-{light,dark}.css` (editor fence-token colors, via `Highlighter::style_for_stack` — see the two-theme-layer invariant below). Re-run `cargo build` after touching this — the generated files are gitignored-adjacent build output, not hand-edited. |
 | `src-tauri/tauri.conf.json` | `bundle.fileAssociations` is the **single source of truth** for which extensions this app handles — it drives the OS-level file association *and* is read back at runtime (`lib.rs`'s `configured_extensions`) for argv/drop filtering and the `markdown_extensions` command. Don't hardcode the extension list anywhere else. |
 | `src-tauri/icons/app-icon.svg` | The app icon's only hand-authored source (monoline "MD" monogram, pupil dot in the D's counter — on `--accent`, `src/styles.css`). Every other file in `src-tauri/icons/` is generated from it via `npm run icon`; don't hand-edit those. Letterforms are stroked `<path>`s, not `<text>` — `tauri icon` rasterizes with resvg and must not depend on system font resolution. The generator also writes `ios/`/`android/` subfolders and a `64x64.png`; delete the `ios`/`android` dirs after regenerating (this project is desktop-only, see below) — `64x64.png` is harmless unreferenced output, same as the `Square*Logo.png`/`StoreLogo.png` Windows Store assets `tauri.conf.json`'s `bundle.icon` doesn't list. |
-| `src/app.js` | All frontend logic: tabs, TOC, find, theme, drag-drop, lazy-loading, edit mode (split-pane source + live preview). The only JS file — no other `.js` exists outside `src/vendor/`. |
+| `src/js/` | All frontend logic — tabs, TOC, find, theme, drag-drop, lazy-loading, edit mode (split-pane source + live preview) — split across 17 classic scripts (`tauri.js`, `helpers.js`, `dom.js`, `state.js`, `theme.js`, `loaders.js`, `toc.js`, `links.js`, `tabs.js`, `save.js`, `editor-commands.js`, `splitter.js`, `edit-mode.js`, `preview.js`, `find.js`, `modal.js`, `main.js`), loaded by `src/index.html` in that fixed order. See the "classic scripts, not ES modules" invariant below before touching load order or adding an 18th file. The only JS outside `src/vendor/`. |
 | `src/vendor/` | Mermaid + KaTeX + CodeMirror 5, vendored (no CDN, no npm dependency at runtime). Don't add a bundler to manage these. |
 | `fixtures/demo.md` | Exercises every rendering feature (tables, task lists, code, mermaid, math, footnotes, raw HTML) — use it to sanity-check rendering changes. |
 
@@ -30,7 +32,7 @@ alone. Add one only when it carries information the code itself can't: *why*
 a non-obvious choice was made, a constraint from outside this file (an
 OS/library/framework quirk), or a historical footgun ("this was a real,
 shipped bug") — the kind already throughout the Invariants section below and
-`render.rs`/`lib.rs`/`app.js`. Never add a comment that just restates what
+`render.rs`/`lib.rs`/`src/js/`. Never add a comment that just restates what
 the next line does; if a comment only explains *what*, delete it or rename
 something instead. This is guidance for new code, not a mandate to strip
 existing rationale comments as a side effect of an unrelated change.
@@ -53,24 +55,25 @@ existing rationale comments as a side effect of an unrelated change.
   relative image/link destination to an absolute filesystem path (using
   `std::path`, which has real Windows/POSIX semantics) and grants the
   asset-protocol scope for exactly the image files it found. It emits that
-  path into a `data-path` attribute (see `resolve_event` / `resolve_local_image`),
-  not `src`/`href` — ammonia applies URL semantics to those, and a resolved
-  Windows path (`C:\Users\...`) parses as URL scheme `c`, which isn't in
-  ammonia's scheme allowlist, so the whole attribute is silently dropped.
-  This was a real, shipped bug: every local image and local link was dead
-  on Windows, hidden by Rust unit tests that hardcoded POSIX-only base dirs
-  (`render.rs`'s test module now builds paths through `tdir`/`abs` helpers
-  so this is covered cross-platform). `sanitize()`'s ammonia builder
+  path into a `data-path` attribute (see `resolve_event` / `resolve_local_image`
+  in `render/events.rs`), not `src`/`href` — ammonia applies URL semantics to
+  those, and a resolved Windows path (`C:\Users\...`) parses as URL scheme
+  `c`, which isn't in ammonia's scheme allowlist, so the whole attribute is
+  silently dropped. This was a real, shipped bug: every local image and
+  local link was dead on Windows, hidden by Rust unit tests that hardcoded
+  POSIX-only base dirs (`render/testutil.rs`'s `tdir`/`abs` helpers now
+  build paths cross-platform). `render/sanitize.rs`'s ammonia builder
   allowlists `data-path` (plus `role`/`tabindex`, needed because an `<a>`
   with no `href` gets neither keyboard focus nor a pointer cursor for free)
   scoped to `img`/`a` specifically — don't widen it to `add_generic_attributes`.
-  The frontend never joins paths or sniffs separators — `rewriteImageSources`
-  and the click handler in `app.js` just read `data-path` off the element
-  and hand it to `convertFileSrc`/`openPaths`/`openWithSystem` verbatim. If
-  you find yourself adding `.split('/')`-style path logic to `app.js`, stop
-  — it belongs in `render.rs`. External/anchor/scheme'd destinations are
-  unaffected: `resolve_local` returns `None` for those, so they keep
-  flowing through pulldown-cmark's normal `href=`/`src=` output.
+  The frontend never joins paths or sniffs separators — `js/links.js`'s
+  `rewriteImageSources` and click handler just read `data-path` off the
+  element and hand it to `convertFileSrc`/`openPaths`/`openWithSystem`
+  verbatim. If you find yourself adding `.split('/')`-style path logic to
+  the frontend, stop — it belongs in `render.rs`. External/anchor/scheme'd
+  destinations are unaffected: `render/paths.rs`'s `resolve_local` returns
+  `None` for those, so they keep flowing through pulldown-cmark's normal
+  `href=`/`src=` output.
 
 - **File-open events are a hint, not the payload.** Tauri creates the
   `main` window from `tauri.conf.json` *before* running `.setup()` or
@@ -86,7 +89,7 @@ existing rationale comments as a side effect of an unrelated change.
   that's already correct.** That's the intent behind "render exactly
   once, on first visibility" — but it now has two call sites, not one.
   For a plain view-only tab it's still literally once: each tab keeps its
-  own persistent `<article>` element (`app.js`'s `state.tabs[i].contentEl`);
+  own persistent `<article>` element (`js/state.js`'s `state.tabs[i].contentEl`);
   switching tabs toggles a CSS class, it doesn't re-render, and
   `activateTab`'s one-way `tab.rendered` flag is what makes "once" hold.
   For a tab in split (edit) mode, the preview re-renders on every
@@ -101,7 +104,7 @@ existing rationale comments as a side effect of an unrelated change.
   one this guards against).
 
 - **Lazy-load gating.** `has_mermaid`/`has_math` come from `render.rs` and
-  gate `ensureMermaid()`/`ensureKatex()` in `app.js` — a plain document
+  gate `ensureMermaid()`/`ensureKatex()` in `js/loaders.js` — a plain document
   must never fetch either bundle. If you add a new heavy client-side
   feature, follow the same pattern (a boolean flag from Rust, a memoized
   loader promise in JS).
@@ -127,13 +130,14 @@ existing rationale comments as a side effect of an unrelated change.
   already; don't reintroduce it.
 
 - **The write path is one narrow, validated command — not
-  `tauri-plugin-fs`.** `save_markdown_file` (`lib.rs`) is the app's only
-  filesystem write. It's a deliberately small custom command rather than
-  the fs plugin, which would need a broad ACL scope grant reachable by
-  any code running in the webview — this app renders untrusted markdown,
-  so keeping the write surface to one extension-validated path is a
-  meaningfully smaller attack surface. It validates the target extension
-  via `is_markdown_path` before writing, and writes atomically (temp file
+  `tauri-plugin-fs`.** `save_markdown_file` (`commands.rs`) is the app's
+  only filesystem write. It's a deliberately small custom command rather
+  than the fs plugin, which would need a broad ACL scope grant reachable
+  by any code running in the webview — this app renders untrusted
+  markdown, so keeping the write surface to one extension-validated path
+  is a meaningfully smaller attack surface. It validates the target
+  extension via `is_markdown_path` (`files.rs`) before writing, and writes
+  atomically (temp file
   in the *same* directory, then `rename` over the target — same-directory
   matters because a cross-filesystem rename isn't atomic). Don't widen
   this into a general-purpose write command, and don't add
@@ -141,16 +145,17 @@ existing rationale comments as a side effect of an unrelated change.
 
 - **Every path-taking Tauri command validates the extension Rust-side —
   the JS filters are UX, not the boundary.** `require_markdown_path`
-  (`lib.rs`) gates `open_markdown_file`, `read_markdown_source`, and
-  `save_markdown_file` alike. The open dialog, drop handler, and link
-  click also filter by extension in `app.js`, but a compromised webview
+  (`files.rs`) gates `open_markdown_file`, `read_markdown_source`, and
+  `save_markdown_file` alike (all three now in `commands.rs`). The open
+  dialog and drop handler (`js/main.js`) and link click (`js/links.js`)
+  also filter by extension in the frontend, but a compromised webview
   can call `invoke` directly, so a command that would read or write
   `~/.ssh/id_rsa` when handed that path is a real hole regardless of
   what the frontend does. Any new command that takes a path goes
   through `require_markdown_path` (or a stricter check) first.
 
 - **`opener.openPath` is only ever called via `openWithSystem`
-  (`app.js`), which denylists executable extensions and then shows a
+  (`js/links.js`), which denylists executable extensions and then shows a
   native confirm with the resolved absolute path.** By the time a link
   reaches the click handler, `render.rs` has resolved it to an absolute
   filesystem path — including `../` escapes above the document's own
@@ -168,8 +173,8 @@ existing rationale comments as a side effect of an unrelated change.
   passes a declaration block through *verbatim* — raw
   `<td style="position:fixed;inset:0;background:url(https://…)">` in a
   document would paint over the whole window and beacon out. Widen the
-  `filter_style_properties` list only for a property `render.rs` itself
-  produces, never for "a document might want it."
+  `filter_style_properties` list only for a property `render/events.rs`
+  itself produces, never for "a document might want it."
 
 - **`app.security.csp` is set (`tauri.conf.json`); don't null it.** The
   app loads no remote code — every script/style/font is vendored — so
@@ -186,9 +191,10 @@ existing rationale comments as a side effect of an unrelated change.
   `render()`'s asset list reflects whatever an image destination
   *currently* is, including a half-typed path mid-edit
   (`![](diagram.png)` grants scope for `d`, `di`, `dia`, … along the way
-  if ungated). `render_and_grant` filters to `Path::is_file()` before
-  granting for exactly this reason — don't remove that filter, and don't
-  add another `scope.allow_file` call site that skips it.
+  if ungated). `render_and_grant` (`commands.rs`) filters to
+  `Path::is_file()` before granting for exactly this reason — don't remove
+  that filter, and don't add another `scope.allow_file` call site that
+  skips it.
 
 - **Platform-gated `tauri`/`RunEvent` variants must be `#[cfg]`-gated in
   our code too, matching the crate's own gate exactly — not just
@@ -210,7 +216,7 @@ existing rationale comments as a side effect of an unrelated change.
   which `muda` gives the Cmd+W accelerator on macOS. AppKit resolves menu
   key equivalents before the webview ever sees the keystroke, so that item
   would hijack this app's own Cmd+W ("close the active tab," wired in
-  `app.js`'s global keydown handler) and close the whole window instead.
+  `js/main.js`'s global keydown handler) and close the whole window instead.
   `menu.rs` hand-builds every submenu instead, and omits `close_window`
   everywhere. Don't add it back, and don't switch back to `Menu::default()`.
 
@@ -225,7 +231,7 @@ existing rationale comments as a side effect of an unrelated change.
   `terminate:`. The predefined item would therefore terminate the process
   with **no interceptable event at all**, silently bypassing the
   unsaved-changes quit sequence. The corollary: `AppHandle::exit(0)` (via
-  `quit_app`) is the only sanctioned way this app ends itself — it's the
+  `quit_app`, `commands.rs`) is the only sanctioned way this app ends itself — it's the
   one path that produces an *unprevented* `ExitRequested` without
   re-entering `WindowEvent::CloseRequested`, so the frontend's
   already-confirmed quit sequence can't loop back into its own prompt.
@@ -238,13 +244,14 @@ existing rationale comments as a side effect of an unrelated change.
   after running listeners — any `await` first and the window closes
   anyway, so `lib.rs`'s `on_window_event` handler can only prevent-and-emit
   in one synchronous step, never await the frontend's answer. And emitting
-  `"close-requested"` before `app.js`'s listener for it exists would lose
+  `"close-requested"` before `js/main.js`'s listener for it exists would lose
   the event outright (Tauri doesn't replay events) — the same race
   `AppState`'s `pending`/`files-pending` queue already guards against, just
   on the way out instead of the way in. `frontend_ready` (flipped by the
-  `mark_frontend_ready` command, called only after `init()` has registered
-  both the `close-requested` and `menu-action` listeners) is what makes the
-  window still closable if the frontend never finishes loading.
+  `mark_frontend_ready` command in `commands.rs`, called only after `init()`
+  in `js/main.js` has registered both the `close-requested` and
+  `menu-action` listeners) is what makes the window still closable if the
+  frontend never finishes loading.
 
 - **`tauri_plugin_single_instance` is registered on Windows/Linux only**
   (`#[cfg(not(target_os = "macos"))]` in `lib.rs`). On macOS it forwards
@@ -256,12 +263,34 @@ existing rationale comments as a side effect of an unrelated change.
   connected to the running instance and forwarded an empty argv,
   silently dropping the file — this was a real, shipped bug.
 
+- **The frontend is deliberately N classic scripts sharing one global
+  lexical scope — not ES modules, not IIFEs.** `src/index.html` loads
+  `src/js/*.js` as 17 plain `<script src>` tags, in the fixed order listed
+  in the file map above. Two reasons this can't become `type="module"` or
+  get wrapped: the JS test suite (`tests/harness.mjs`) evaluates the
+  concatenated source and appends an epilogue that reads top-level
+  `const`/`let` bindings (`state`, `els`, `EDITOR_SHORTCUTS`, …) by bare
+  name — that only resolves because every file shares one script-level
+  scope; and several tests (`tests/tabs.test.mjs`, `tests/link-routing.test.mjs`)
+  stub an internal function by reassigning `window.<fn>` and asserting a
+  *different* top-level function's call to it was intercepted — under
+  modules or an IIFE that call binds lexically at declaration time and the
+  stub becomes a silent no-op. Load order matters only for what runs at
+  script-evaluation time rather than inside a later function call:
+  `js/dom.js`'s `els` must precede `js/toc.js` and `js/links.js` (both
+  register listeners on `els.*` at load, not inside `init()`), and
+  `js/main.js` must be last — it ends with a bare `init();`. Don't move
+  those three listener registrations into `wireStaticUI`; `js/main.js`'s
+  `init()` is never called by the test harness (see `tests/harness.mjs`'s
+  `TRAILING_INIT_CALL`), so anything the app needs before a real page load
+  has to run at script-evaluation time the way those three already do.
+
 ## Day to day
 
 ```bash
 npm install && npm run tauri dev          # dev build, hot-reload
 npm run tauri dev -- fixtures/demo.md     # dev build with a file preloaded
-cd src-tauri && cargo test                # render.rs unit tests
+cd src-tauri && cargo test                # render/, files/, commands/ unit tests + contracts.rs
 npm run tauri build                       # release bundles
 ```
 
@@ -301,8 +330,8 @@ instead of launching your new one.
   ships a `SHA256SUMS-*.txt` alongside it — see `README.md`'s
   "Download & install".
 - No auto-update mechanism.
-- Sanitizer/DoS headroom not addressed yet: `unique_id` in `render.rs`
-  is quadratic on N duplicate headings, and syntect's `fancy-regex`
+- Sanitizer/DoS headroom not addressed yet: `unique_id` in
+  `render/headings.rs` is quadratic on N duplicate headings, and syntect's `fancy-regex`
   grammars have no backtracking limit, so a hostile fence body can hang
   a render (per debounced keystroke in split mode). Hang, not crash —
   `panic = "abort"` only matters for real panics, and there are no
@@ -310,12 +339,12 @@ instead of launching your new one.
 - Fixed: local links/images used to die on Windows (`C:\...` in `src=`/
   `href=` parsed by ammonia as URL scheme `c` and dropped) — see the
   path-resolution invariant above for the `data-path` fix. Covered by
-  cross-platform Rust unit tests (`render.rs`'s `tdir`/`abs` test helpers)
-  and by Windows CI (`.github/workflows/build.yml`'s `check` job), but
+  cross-platform Rust unit tests (`render/testutil.rs`'s `tdir`/`abs` test
+  helpers) and by Windows CI (`.github/workflows/build.yml`'s `check` job), but
   still not verified in a real Windows GUI — CI proves the attribute
   survives sanitization with a drive letter, not that the Tauri asset
   protocol renders that path in a Windows webview.
-- "New Document" (`newDocument` in `app.js`) creates an untitled,
+- "New Document" (`newDocument` in `js/tabs.js`) creates an untitled,
   never-saved tab (`tab.path === null` until a successful save); its first
   Cmd/Ctrl+S goes through `saveTabAs`/`save_markdown_file_as` instead of
   `save_markdown_file`. There is deliberately **no "Save As…"** for a file
@@ -324,8 +353,8 @@ instead of launching your new one.
   a path that's already open in another tab is refused with a message
   dialog rather than merging or shadowing the two tabs.
 - Both tab-close and app-quit now guard on unsaved changes (the shared
-  three-button modal driven by `confirmClosable`/`confirmUnsaved` in
-  `app.js`), and quitting with several dirty tabs prompts once per tab,
+  three-button modal driven by `confirmClosable` in `js/tabs.js` /
+  `confirmUnsaved` in `js/modal.js`), and quitting with several dirty tabs prompts once per tab,
   switching to each one first. This only covers the paths that go through
   `WindowEvent::CloseRequested` or the quit menu item — macOS Dock icon →
   Quit, Log Out/Restart, and a force-quit all send `terminate:` directly
@@ -343,7 +372,7 @@ instead of launching your new one.
   The keyboard shortcuts work regardless, since muda registers no GTK
   accelerator for these items to steal.
 - No scroll sync between the editor and preview panes in split mode.
-- The split-pane divider (`app.js`'s `attachSplitterDrag`) is
+- The split-pane divider (`js/splitter.js`'s `attachSplitterDrag`) is
   drag-resizable via Pointer Events + `setPointerCapture` — the pane
   widths come from one CSS custom property (`--split-ratio`, set on each
   `.tab-pane`) so the drag handler only ever writes one number. The ratio
@@ -356,7 +385,7 @@ instead of launching your new one.
   keyboard resize (no `tabindex` on the separator) — that would need its
   own keydown handling alongside the app's global handler and a tab-order
   decision, out of scope for the drag itself.
-- The editor's formatting toolbar (`app.js`'s `TOOLBAR_GROUPS`) covers
+- The editor's formatting toolbar (`js/editor-commands.js`'s `TOOLBAR_GROUPS`) covers
   Bold/Italic/Strikethrough/Inline-code, Heading/Blockquote/Bullet-list/
   Numbered-list/Task-list, and Link/Image/Horizontal-rule/Table/Footnote —
   every control is real syntax this app's own `render.rs` enables. No
@@ -369,8 +398,8 @@ instead of launching your new one.
   on the first header cell), and footnote-number reuse (numbering always
   increments off the highest existing `[^n]:` definition, never recycles a
   deleted one's number).
-- **`extraKeys` bindings must be built through `app.js`'s `editorKeyName`
-  (used by `EDITOR_SHORTCUTS`/`editorExtraKeys`), never hand-written with
+- **`extraKeys` bindings must be built through `js/editor-commands.js`'s
+  `editorKeyName` (used by `EDITOR_SHORTCUTS`/`editorExtraKeys`), never hand-written with
   a `"Mod-"` prefix.** CodeMirror 5 looks `extraKeys` up as a raw object
   property against the name `addModifierNames` builds at keypress time —
   `"Cmd-B"` on macOS, `"Ctrl-B"` elsewhere, Shift outermost
@@ -380,27 +409,27 @@ instead of launching your new one.
   Cmd/Ctrl+Bold/Italic/Strikethrough bindings were originally written as
   `"Mod-B"` etc. and matched nothing for the entire life of the split-mode
   feature — the toolbar buttons worked, the advertised shortcuts silently
-  didn't. `EDITOR_SHORTCUTS` (`app.js`, next to `TOOLBAR_GROUPS`) is the
-  full current set — Bold/Italic/Strikethrough, Link (Cmd/Ctrl+K), Inline
-  code (+Shift+C), Blockquote (+Shift+.), and Heading 1–6/paragraph
-  (Cmd/Ctrl+1–6, +0) — and every entry calls a function the toolbar also
-  calls, which is what keeps "only real Markdown syntax `render.rs`
-  renders" true by construction rather than by convention. Cmd/Ctrl+N
-  (native menu accelerator → `newWelcomeTab`) and Cmd/Ctrl+W (`app.js`'s
-  keydown handler → `closeTab` → `confirmClosable` → the shared
-  Save/Don't Save/Cancel modal) were both already correct before this and
-  needed no change.
+  didn't. `EDITOR_SHORTCUTS` (`js/editor-commands.js`, next to
+  `TOOLBAR_GROUPS`) is the full current set — Bold/Italic/Strikethrough,
+  Link (Cmd/Ctrl+K), Inline code (+Shift+C), Blockquote (+Shift+.), and
+  Heading 1–6/paragraph (Cmd/Ctrl+1–6, +0) — and every entry calls a
+  function the toolbar also calls, which is what keeps "only real
+  Markdown syntax `render.rs` renders" true by construction rather than
+  by convention. Cmd/Ctrl+N (native menu accelerator → `newWelcomeTab`)
+  and Cmd/Ctrl+W (`js/main.js`'s keydown handler → `closeTab` in
+  `js/tabs.js` → `confirmClosable` → the shared Save/Don't Save/Cancel
+  modal) were both already correct before this and needed no change.
 - Fence-language resolution goes through `mode/meta.js`'s alias table,
   which is missing a couple of short forms this project's own fixtures
   don't hit but real documents might — notably no `"py"` alias for Python
   and no `"rs"` alias for Rust (the full words work fine). Upstream
   CodeMirror's own limitation, not worth patching around.
 - **Live-preview render cost has real headroom pressure on larger
-  documents.** `render.rs`'s `render_timing_on_realistic_documents` test
-  (ignored by default; run with `cargo test --release -- --ignored
+  documents.** `render/tests.rs`'s `render_timing_on_realistic_documents`
+  test (ignored by default; run with `cargo test --release -- --ignored
   --nocapture`) measured p50=82ms / p95=158ms on `fixtures/large.md`
-  (56KB, code-fence-heavy) — against the ~200ms debounce in `app.js`'s
-  `schedulePreview`. That leaves little room for IPC and `innerHTML`
+  (56KB, code-fence-heavy) — against the ~200ms debounce in
+  `js/preview.js`'s `schedulePreview`. That leaves little room for IPC and `innerHTML`
   reflow on top before a large document's preview starts feeling behind
   while typing. Syntect's per-fence highlighting is the dominant cost
   (every fence is re-highlighted on every render, not just the one being

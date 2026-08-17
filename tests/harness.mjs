@@ -1,16 +1,21 @@
-// Loads the real src/app.js into a jsdom window without changing a byte of
-// it, so the test suites exercise the actual production file rather than a
-// copy or a refactored/exported variant. app.js is a classic script with no
-// exports (see CLAUDE.md's module-structure note) — every top-level
-// `function` declaration lands on `window` for free, but top-level
-// `const`/`let` bindings (state, els, EDITOR_SHORTCUTS, ...) do not, so an
-// epilogue appended to the *same* script text exposes exactly the ones the
-// suites need, by reference, onto `window.__testExports`.
+// Loads the real src/js/*.js scripts into a jsdom window without changing a
+// byte of them, so the test suites exercise the actual production files
+// rather than a copy or a refactored/exported variant. The frontend is a
+// series of classic scripts with no exports, sharing one global lexical
+// scope by design (see CLAUDE.md's "classic scripts, not ES modules"
+// invariant) — every top-level `function` declaration lands on `window` for
+// free, but top-level `const`/`let` bindings (state, els, EDITOR_SHORTCUTS,
+// ...) do not, so an epilogue appended to the *same* concatenated script
+// text exposes exactly the ones the suites need, by reference, onto
+// `window.__testExports`.
 //
-// The only thing ever removed from the source is the trailing bare
-// `init();` call — everything else, including every function body, runs
-// unmodified. Removing it is what keeps a fresh jsdom window from firing
-// the whole Tauri IPC bootstrap (markdown_extensions, drainAndOpen, three
+// Which files load, and in what order, is read from src/index.html itself
+// (its <script src="js/...">  tags) rather than hardcoded here, so a future
+// re-split doesn't need a matching harness edit. The only thing ever
+// removed from the concatenated source is the trailing bare `init();` call
+// — everything else, including every function body, runs unmodified.
+// Removing it is what keeps a fresh jsdom window from firing the whole
+// Tauri IPC bootstrap (markdown_extensions, drainAndOpen, three
 // event.listen calls, mark_frontend_ready, wireDragDrop) on every test.
 
 import { readFileSync } from "node:fs";
@@ -22,19 +27,24 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.join(__dirname, "..");
 
 const RAW_INDEX_HTML = readFileSync(path.join(REPO_ROOT, "src/index.html"), "utf8");
-// The real <script src="app.js"> tag would make jsdom try to fetch a local
-// file over its resource loader; instead we inject the (lightly modified)
-// source ourselves as an inline <script> below.
-const INDEX_HTML = RAW_INDEX_HTML.replace(/<script src="app\.js"><\/script>\s*/, "");
 
-const APP_JS_SOURCE = readFileSync(path.join(REPO_ROOT, "src/app.js"), "utf8");
+// Every <script src="..."> tag in document order — jsdom's resource loader
+// would try to fetch these as local files, so each real tag is stripped and
+// its source concatenated in as one inline <script> below instead.
+const SCRIPT_TAG_RE = /<script src="([^"]+)"><\/script>\s*/g;
+const scriptSrcs = [...RAW_INDEX_HTML.matchAll(SCRIPT_TAG_RE)].map((m) => m[1]);
+const INDEX_HTML = RAW_INDEX_HTML.replace(SCRIPT_TAG_RE, "");
+
+const APP_JS_SOURCE = scriptSrcs
+  .map((src) => readFileSync(path.join(REPO_ROOT, "src", src), "utf8"))
+  .join("\n");
 
 const TRAILING_INIT_CALL = /\ninit\(\);\s*$/;
 if (!TRAILING_INIT_CALL.test(APP_JS_SOURCE)) {
   throw new Error(
-    "harness.mjs: src/app.js no longer ends with a bare `init();` call on its own line — " +
-      "update TRAILING_INIT_CALL (and re-check that stripping it still prevents the IPC " +
-      "bootstrap from running) before trusting this harness again."
+    "harness.mjs: the last <script> in src/index.html no longer ends with a bare `init();` " +
+      "call on its own line — update TRAILING_INIT_CALL (and re-check that stripping it still " +
+      "prevents the IPC bootstrap from running) before trusting this harness again."
   );
 }
 const APP_JS_BODY = APP_JS_SOURCE.replace(TRAILING_INIT_CALL, "\n");
@@ -130,18 +140,19 @@ function defaultTauriStub() {
   };
 }
 
-/// Builds one fresh window + evaluates app.js into it. Every test that
-/// touches module-level state (state.tabs, find.currentIndex, the loader
-/// memos, localStorage, ...) must call this itself rather than share a
-/// window with another test — nothing in app.js resets that state on its
-/// own, by design (see CLAUDE.md's tab-lifetime notes).
+/// Builds one fresh window + evaluates the frontend's scripts into it.
+/// Every test that touches module-level state (state.tabs,
+/// find.currentIndex, the loader memos, localStorage, ...) must call this
+/// itself rather than share a window with another test — nothing in the
+/// frontend resets that state on its own, by design (see CLAUDE.md's
+/// tab-lifetime notes).
 export function freshApp() {
   const dom = new JSDOM(INDEX_HTML, { url: "http://localhost/", runScripts: "dangerously" });
   const { window } = dom;
 
   // --- stubs for browser APIs jsdom doesn't implement, installed BEFORE
-  // app.js evaluates (its top-level code reads matchMedia and builds
-  // `els` synchronously at eval time). ---
+  // the frontend's scripts evaluate (js/theme.js's top-level code reads
+  // matchMedia and js/dom.js builds `els` synchronously at eval time). ---
   window.CSS = window.CSS || {};
   window.CSS.escape = cssEscape;
 
@@ -196,8 +207,8 @@ export function freshApp() {
 // behavior: getRange silently clamps an out-of-bounds `ch` to the line's
 // actual length rather than throwing. wrapSelection's "markers sit just
 // outside the selection" branch depends on exactly that (see its comment
-// in app.js) — a fake that throws on an out-of-range probe would make
-// that branch untestable, not just untested.
+// in js/editor-commands.js) — a fake that throws on an out-of-range probe
+// would make that branch untestable, not just untested.
 
 function clampPos(lines, pos) {
   const line = Math.min(Math.max(pos.line, 0), lines.length - 1);

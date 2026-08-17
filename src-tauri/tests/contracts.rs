@@ -13,7 +13,28 @@ fn repo_file(rel: &str) -> String {
     std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()))
 }
 
-/// menu.rs's NEW/OPEN/SAVE/QUIT id constants and app.js's
+/// Concatenation of every file in src/js/ — the frontend is a series of
+/// classic scripts sharing one global scope (see CLAUDE.md), not one file,
+/// so `handleMenuAction` could in principle live in any of them. Reading
+/// the whole directory rather than a hardcoded path means this check
+/// doesn't need an edit if that file ever moves again.
+fn repo_js_sources() -> String {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("src/js");
+    let mut entries: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", dir.display()))
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|ext| ext == "js"))
+        .collect();
+    entries.sort();
+    entries
+        .into_iter()
+        .map(|p| std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("failed to read {}: {e}", p.display())))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// menu.rs's NEW/OPEN/SAVE/QUIT id constants and the frontend's
 /// handleMenuAction switch are a string contract across two languages —
 /// nothing else checks that a rename on one side doesn't silently orphan
 /// a menu item as a no-op on the other. `menu` isn't a `pub` module (no
@@ -23,12 +44,12 @@ fn repo_file(rel: &str) -> String {
 #[test]
 fn menu_ids_match_the_frontend_switch() {
     let menu_rs = repo_file("src-tauri/src/menu.rs");
-    let app_js = repo_file("src/app.js");
+    let js = repo_js_sources();
     for (const_name, id) in [("NEW", "new"), ("OPEN", "open"), ("SAVE", "save"), ("QUIT", "quit")] {
         let const_decl = format!("pub const {const_name}: &str = \"{id}\";");
         assert!(menu_rs.contains(&const_decl), "menu.rs is missing {const_decl:?}");
         let switch_case = format!("case \"{id}\":");
-        assert!(app_js.contains(&switch_case), "app.js's handleMenuAction is missing {switch_case:?}");
+        assert!(js.contains(&switch_case), "handleMenuAction is missing {switch_case:?}");
     }
 }
 

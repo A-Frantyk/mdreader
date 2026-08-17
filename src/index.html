@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>mdreader</title>
     <!-- href swapped between code-theme-light.css / code-theme-dark.css by
-         app.js's setCodeThemeLink, per the resolved theme. -->
+         js/theme.js's setCodeThemeLink, per the resolved theme. -->
     <link rel="stylesheet" href="code-theme-light.css" id="code-theme" />
     <link rel="stylesheet" href="styles.css" />
   </head>
@@ -50,7 +50,7 @@
       <div class="drop-overlay" id="drop-overlay">Drop to open</div>
 
       <!-- Cloned into a welcome tab's contentEl by buildWelcomePane in
-           app.js — same screen as #empty-state above, but with
+           js/tabs.js — same screen as #empty-state above, but with
            data-action attributes instead of ids: a cloned <template>
            can't reuse ids (several welcome tabs can be open at once). Keep
            this in sync with #empty-state by hand if that one ever changes;
@@ -79,6 +79,29 @@
       </div>
     </div>
 
-    <script src="app.js"></script>
+    <!-- Classic scripts sharing one global lexical scope, deliberately not
+         ES modules — see CLAUDE.md's "the frontend is N classic scripts"
+         invariant. Load order matters only for the handful of things that
+         run at load time rather than inside a later function call:
+         js/dom.js's `els` must precede js/toc.js and js/links.js (both
+         register listeners on `els.*` at load), and js/main.js must be
+         last (it ends with a bare `init();`). -->
+    <script src="js/tauri.js"></script>
+    <script src="js/helpers.js"></script>
+    <script src="js/dom.js"></script>
+    <script src="js/state.js"></script>
+    <script src="js/theme.js"></script>
+    <script src="js/loaders.js"></script>
+    <script src="js/toc.js"></script>
+    <script src="js/links.js"></script>
+    <script src="js/tabs.js"></script>
+    <script src="js/save.js"></script>
+    <script src="js/editor-commands.js"></script>
+    <script src="js/splitter.js"></script>
+    <script src="js/edit-mode.js"></script>
+    <script src="js/preview.js"></script>
+    <script src="js/find.js"></script>
+    <script src="js/modal.js"></script>
+    <script src="js/main.js"></script>
   </body>
 </html>

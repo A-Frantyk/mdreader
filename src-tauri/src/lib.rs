@@ -76,7 +76,16 @@ fn normalize_markdown_path(state: &AppState, path: &std::path::Path) -> PathBuf 
     if is_markdown_path(state, path) {
         return path.to_path_buf();
     }
-    let mut file_name = path.file_name().unwrap_or_default().to_owned();
+    let Some(file_name) = path.file_name() else {
+        // No file name component at all (e.g. "/" or ".."). There's
+        // nothing sensible to append an extension to — falling through to
+        // `unwrap_or_default` used to synthesize a bare ".markdown" in
+        // the parent directory instead. Leave the path unchanged; the
+        // caller (save-as) still ends up refused downstream by whatever
+        // actually tries to write there.
+        return path.to_path_buf();
+    };
+    let mut file_name = file_name.to_owned();
     file_name.push(".");
     file_name.push(MARKDOWN_EXTENSIONS[0]);
     path.with_file_name(file_name)
@@ -202,6 +211,18 @@ fn atomic_write(target: &std::path::Path, contents: &str) -> Result<(), String> 
 
     std::fs::write(&tmp_path, contents)
         .map_err(|e| format!("Couldn't write {}: {}", tmp_path.display(), e))?;
+
+    // Preserve the target's existing permissions — std::fs::write always
+    // creates the temp file with the platform default mode (0644), and a
+    // rename doesn't fix that up, so without this a document saved as
+    // 0600 would silently become world-readable on every save. Only
+    // applies when a target already exists (a first save has no prior
+    // permissions to preserve, so it keeps the default).
+    #[cfg(unix)]
+    if let Ok(metadata) = std::fs::metadata(target) {
+        let _ = std::fs::set_permissions(&tmp_path, metadata.permissions());
+    }
+
     std::fs::rename(&tmp_path, target).map_err(|e| {
         let _ = std::fs::remove_file(&tmp_path);
         format!("Couldn't save {}: {}", target.display(), e)
@@ -362,7 +383,10 @@ mod tests {
     fn test_state() -> AppState {
         AppState {
             pending: Mutex::new(Vec::new()),
-            markdown_extensions: ["md", "markdown", "mdown", "mkd"].iter().map(|s| s.to_string()).collect(),
+            // Derived from the real constant, not hand-duplicated — a
+            // hardcoded list here could silently drift from
+            // tauri.conf.json's fileAssociations without any test noticing.
+            markdown_extensions: MARKDOWN_EXTENSIONS.iter().map(|s| s.to_string()).collect(),
             frontend_ready: AtomicBool::new(false),
         }
     }
@@ -444,6 +468,43 @@ mod tests {
     }
 
     #[test]
+    fn normalize_markdown_path_leaves_a_path_with_no_file_name_alone() {
+        // `Path::file_name()` is `None` for "/" and "..". Previously this
+        // fell through to `unwrap_or_default()`, turning "/" into
+        // "/.markdown" and ".." into a bare ".markdown" in the parent —
+        // synthesizing a file name out of nothing rather than leaving an
+        // un-normalizable path as-is.
+        let state = test_state();
+        assert_eq!(
+            normalize_markdown_path(&state, std::path::Path::new("/")),
+            PathBuf::from("/")
+        );
+        assert_eq!(
+            normalize_markdown_path(&state, std::path::Path::new("..")),
+            PathBuf::from("..")
+        );
+    }
+
+    #[test]
+    fn require_markdown_path_rejects_a_trailing_dot_or_space() {
+        let state = test_state();
+        for bad in ["/tmp/a.md.", "/tmp/a.md "] {
+            assert!(require_markdown_path(&state, std::path::Path::new(bad)).is_err(), "{bad} accepted");
+        }
+    }
+
+    #[test]
+    fn markdown_extensions_command_returns_the_sorted_configured_list() {
+        // build.rs's generate_markdown_extensions sorts+dedupes, which is
+        // what makes MARKDOWN_EXTENSIONS[0] ("markdown") the deterministic
+        // default the save-as dialog appends. Every existing test compares
+        // against MARKDOWN_EXTENSIONS[0] rather than a literal, so none of
+        // them would catch a reorder in tauri.conf.json's fileAssociations
+        // — this is the one test that actually pins the value.
+        assert_eq!(markdown_extensions(), vec!["markdown", "md", "mdown", "mkd"]);
+    }
+
+    #[test]
     fn atomic_write_creates_and_round_trips_contents() {
         let dir = test_dir("roundtrip");
         let target = dir.join("doc.md");
@@ -484,5 +545,73 @@ mod tests {
             .join("doc.md");
         assert!(atomic_write(&target, "x").is_err());
         assert!(!target.exists());
+    }
+
+    #[test]
+    fn atomic_write_cleans_up_its_temp_file_when_the_rename_fails() {
+        // Target is an existing directory, not a file — `fs::rename`
+        // refuses to replace a directory with a file, so this forces the
+        // one branch (the temp-file cleanup on rename failure) none of
+        // the other atomic_write tests exercise.
+        let dir = test_dir("rename-fails");
+        let target = dir.join("doc.md");
+        std::fs::create_dir(&target).unwrap();
+
+        assert!(atomic_write(&target, "content").is_err());
+        let leftover: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains("mdreader-tmp"))
+            .collect();
+        assert!(leftover.is_empty(), "leftover temp files: {leftover:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn atomic_write_preserves_the_target_files_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = test_dir("permissions");
+        let target = dir.join("secret.md");
+        std::fs::write(&target, "original").unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        atomic_write(&target, "updated").unwrap();
+
+        let mode = std::fs::metadata(&target).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "save must not widen an existing file's permissions");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn atomic_write_round_trips_unicode_and_crlf_contents() {
+        let dir = test_dir("unicode-crlf");
+        let target = dir.join("doc.md");
+        let contents = "café 日本語 🎉\r\nline two\r\n";
+        atomic_write(&target, contents).unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), contents);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn atomic_write_replaces_a_symlink_target_not_its_destination() {
+        let dir = test_dir("symlink");
+        let real_dest = dir.join("real.md");
+        std::fs::write(&real_dest, "original destination contents").unwrap();
+        let link = dir.join("link.md");
+        std::os::unix::fs::symlink(&real_dest, &link).unwrap();
+
+        atomic_write(&link, "new contents").unwrap();
+
+        // The link itself now points at (or contains) the new contents,
+        // but the file it used to point to is untouched — rename() swaps
+        // the directory entry, it doesn't write through a symlink.
+        assert_eq!(std::fs::read_to_string(&link).unwrap(), "new contents");
+        assert_eq!(std::fs::read_to_string(&real_dest).unwrap(), "original destination contents");
+        assert!(!link.is_symlink(), "rename over a symlink should replace the link itself");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

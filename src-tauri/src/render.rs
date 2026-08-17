@@ -678,6 +678,164 @@ mod tests {
     }
 
     #[test]
+    fn title_is_none_when_the_first_heading_is_not_an_h1() {
+        let doc = r("## Sub\n\nBody");
+        assert_eq!(doc.title, None);
+        assert_eq!(doc.headings.len(), 1);
+        assert_eq!(doc.headings[0].level, 2);
+    }
+
+    #[test]
+    fn title_comes_from_the_first_h1_only() {
+        let doc = r("# First\n\n# Second");
+        assert_eq!(doc.title.as_deref(), Some("First"));
+    }
+
+    #[test]
+    fn slugify_keeps_unicode_letters() {
+        assert_eq!(slugify("Über"), "über");
+        assert_eq!(slugify("日本語"), "日本語");
+    }
+
+    #[test]
+    fn slugify_falls_back_to_section_for_punctuation_only_headings() {
+        assert_eq!(slugify("!!!"), "section");
+        let doc = r("# !!!\n\n# Section");
+        assert_eq!(doc.headings[0].id, "section");
+        assert_eq!(doc.headings[1].id, "section-1");
+    }
+
+    #[test]
+    fn explicit_heading_id_colliding_with_a_generated_one_is_deduped() {
+        let doc = r("# Same\n\n# Same\n\n# X {#same-1}");
+        let ids: Vec<&str> = doc.headings.iter().map(|h| h.id.as_str()).collect();
+        assert_eq!(ids, vec!["same", "same-1", "same-1-1"]);
+    }
+
+    #[test]
+    fn unknown_fence_language_falls_back_to_plain_text() {
+        let doc = r("```notalang\nplain body\n```");
+        assert!(doc.html.contains("code-block"), "{}", doc.html);
+        assert!(doc.html.contains("data-lang=\"notalang\""), "{}", doc.html);
+        assert!(doc.html.contains("plain body"), "{}", doc.html);
+    }
+
+    #[test]
+    fn fence_info_string_uses_only_its_first_token() {
+        // A comma is not whitespace, so the whole "rust,ignore" is looked
+        // up as one syntax token (and found by neither name) — this pins
+        // the documented "first whitespace-delimited token" behavior.
+        let doc = r("```rust,ignore\nfn f() {}\n```");
+        assert!(doc.html.contains("data-lang=\"rust,ignore\""), "{}", doc.html);
+
+        let doc = r("```rust extra info\nfn f() {}\n```");
+        assert!(doc.html.contains("data-lang=\"rust\""), "{}", doc.html);
+    }
+
+    #[test]
+    fn indented_code_block_has_no_data_lang_attribute() {
+        let doc = r("    fn f() {}\n");
+        assert!(doc.html.contains("code-block"), "{}", doc.html);
+        assert!(!doc.html.contains("data-lang"), "{}", doc.html);
+    }
+
+    #[test]
+    fn mermaid_fence_matches_case_insensitively_and_escapes_its_body() {
+        let doc = r("```Mermaid\n<script>bad</script>\n```");
+        assert!(doc.has_mermaid);
+        assert!(doc.html.contains("class=\"mermaid\""));
+        assert!(!doc.html.contains("<script>bad</script>"), "{}", doc.html);
+        assert!(doc.html.contains("&lt;script&gt;"), "{}", doc.html);
+    }
+
+    #[test]
+    fn display_math_sets_has_math() {
+        let doc = r("$$\nx^2\n$$");
+        assert!(doc.has_math);
+    }
+
+    #[test]
+    fn escaped_katex_delimiters_do_not_set_has_math() {
+        // KaTeX's auto-render also matches "\(...\)" / "\[...\]" in
+        // app.js's renderMathFor. But `(` and `)` are CommonMark-escapable
+        // punctuation, so pulldown-cmark itself consumes the backslash
+        // before this function ever sees the text — confirmed by
+        // inspecting the parser's event stream directly. The rendered
+        // HTML text nodes therefore never contain a literal backslash
+        // either, so KaTeX's own browser-side delimiter scan would fail
+        // identically. There's no gap to close here: has_math staying
+        // false for this input is consistent with what actually reaches
+        // the DOM, not a missed detection.
+        let doc = r(r"Inline \(x\) and display \[y\] math.");
+        assert!(!doc.has_math);
+        assert!(!doc.html.contains('\\'), "{}", doc.html);
+    }
+
+    #[test]
+    fn empty_link_destination_resolves_to_nothing() {
+        let doc = r("[x]()");
+        assert!(doc.html.contains("href=\"\""), "{}", doc.html);
+    }
+
+    #[test]
+    fn absolute_image_destination_is_collected_as_is() {
+        // A destination that doesn't exist on disk forces the
+        // lexically_normalize fallback (not canonicalize), so the
+        // assertion doesn't depend on this machine's filesystem layout
+        // (e.g. macOS symlinking /etc -> /private/etc).
+        let (doc, assets) = render(
+            "![missing](/definitely/does/not/exist.png)",
+            Path::new("/tmp/mdreader-test/docs"),
+        );
+        assert!(doc.html.contains("src=\"/definitely/does/not/exist.png\""), "{}", doc.html);
+        assert_eq!(assets, vec![PathBuf::from("/definitely/does/not/exist.png")]);
+    }
+
+    #[test]
+    fn lexically_normalize_swallows_a_leading_parent_component() {
+        // Documents the intentional (if surprising) behavior: a leading
+        // ".." has nothing to pop against, so it's silently dropped
+        // rather than preserved. Exercised end-to-end (not just here) by
+        // relative_links_may_escape_base_dir / resolves_parent_relative_image.
+        assert_eq!(lexically_normalize(Path::new("../x")), PathBuf::from("x"));
+        assert_eq!(lexically_normalize(Path::new("/../x")), PathBuf::from("/x"));
+    }
+
+    #[test]
+    fn setext_headings_get_ids_and_a_toc_entry() {
+        let doc = r("Title\n=====\n\nBody");
+        assert!(doc.html.contains("id=\"title\""), "{}", doc.html);
+        assert_eq!(doc.title.as_deref(), Some("Title"));
+        assert_eq!(doc.headings[0].level, 1);
+    }
+
+    #[test]
+    fn tables_footnotes_and_tasklists_in_one_document_keep_writer_state() {
+        // The broadest guard for the "one push_html call" invariant: each
+        // of these features is also tested in isolation above, which is
+        // exactly what let the original writer-state-corruption bug hide
+        // — this asserts all three still behave correctly when they share
+        // one document and one HtmlWriter.
+        let doc = r("| a | b | c |\n|:--|:-:|--:|\n| 1 | 2 | 3 |\n\n\
+                      - [x] done\n- [ ] todo\n\n\
+                      Ref one.[^a] Ref two.[^b]\n\n\
+                      [^a]: note one\n[^b]: note two");
+
+        let th_cells = doc.html.matches("<th").count() - doc.html.matches("<thead").count();
+        assert_eq!(th_cells, 3, "{}", doc.html);
+        assert_eq!(doc.html.matches("<td").count(), 3, "{}", doc.html);
+        let flat = doc.html.replace(' ', "");
+        assert!(flat.contains("text-align:left"), "{}", doc.html);
+        assert!(flat.contains("text-align:center"), "{}", doc.html);
+        assert!(flat.contains("text-align:right"), "{}", doc.html);
+
+        assert_eq!(doc.html.matches("type=\"checkbox\"").count(), 2, "{}", doc.html);
+
+        assert!(doc.html.contains("footnote-definition-label\">1</sup>"), "{}", doc.html);
+        assert!(doc.html.contains("footnote-definition-label\">2</sup>"), "{}", doc.html);
+    }
+
+    #[test]
     #[ignore] // run explicitly: `cargo test --release -- --ignored render_timing`
     fn render_timing_on_realistic_documents() {
         // Dependency-free timing stand-in (no dev-dependencies exist in

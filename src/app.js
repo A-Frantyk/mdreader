@@ -50,7 +50,11 @@ function basename(path) {
 }
 
 function extOf(path) {
-  const name = basename(path);
+  // Strip a query string or fragment before looking for the extension —
+  // without this, a link like "notes.md?v=2" extracts "md?v=2" as its
+  // extension, matches nothing in markdownExtensions/BLOCKED_OPEN_EXTENSIONS,
+  // and falls through to the wrong click-routing branch.
+  const name = basename(path).split(/[?#]/)[0];
   const dot = name.lastIndexOf(".");
   return dot === -1 ? "" : name.slice(dot + 1).toLowerCase();
 }
@@ -110,7 +114,12 @@ const SPLIT_MIN_PANE_PX = 160;
 
 function splitRatio() {
   const stored = Number(localStorage.getItem(SPLIT_RATIO_KEY));
-  return Number.isFinite(stored) && stored > 0 ? stored : SPLIT_RATIO_DEFAULT;
+  if (!Number.isFinite(stored) || stored <= 0) return SPLIT_RATIO_DEFAULT;
+  // Sanity clamp on a value read straight from localStorage (hand-edited
+  // or corrupted) before any real layout exists to pixel-clamp it —
+  // attachSplitterDrag's applyFromX is the actual SPLIT_MIN_PANE_PX-based
+  // clamp once a drag or the pane's real width is available.
+  return Math.min(Math.max(stored, 10), 90);
 }
 
 async function openFileDialog() {
@@ -979,8 +988,13 @@ function toggleLinePrefix(cm, testRe, makePrefix, { stripOtherListMarkers = fals
         if (!testRe.test(text)) {
           const base = stripOtherListMarkers ? text.replace(LIST_PREFIX_RE, "") : text;
           cm.replaceRange(makePrefix(n) + base, { line: l, ch: 0 }, { line: l, ch: text.length });
+          // Only lines that actually get a fresh prefix consume the next
+          // number — n used to advance for every touched line, including
+          // ones skipped because they already had a prefix, which skewed
+          // the newly-added numbers on a partially-numbered selection
+          // (e.g. two lines both ending up "2.").
+          n++;
         }
-        n++;
       }
     }
   });

@@ -15,13 +15,13 @@ planned; `#[cfg_attr(mobile, ...)]` in `lib.rs`/`main.rs` is inert
 |---|---|
 | `src-tauri/src/render.rs` + `render/` | Markdown → sanitized HTML. `render.rs` is the single-pass driver — has its own module doc explaining the design, read it before touching any of this. It delegates to submodules: `render/events.rs` (`Tag::Link`/`Tag::Image` → `<a data-path>`/`<img data-path>` HTML), `render/paths.rs` (destination resolution), `render/headings.rs` (slug/id generation), `render/highlight.rs` (syntect fences, `SYNTAX_SET`), `render/sanitize.rs` (the ammonia allowlist). Each submodule's `#[cfg(test)]` tests live in a sibling `tests.rs` (e.g. `render/paths/tests.rs`) rather than inline — a child module reaches its parent's private items through `use super::*` regardless, so this costs no visibility widening. |
 | `src-tauri/src/lib.rs` | The three file-open entry paths, `AppState`, `run()`, plugin registration, the `on_window_event` close handshake. `AppState`'s doc comment explains the queue-always pattern (and, for `frontend_ready`, the analogous close-handshake race). |
-| `src-tauri/src/commands.rs` | The 9 Tauri commands (`open_markdown_file`, `drain_pending_files`, `markdown_extensions`, `read_markdown_source`, `render_markdown`, `save_markdown_file`, `save_markdown_file_as`, `mark_frontend_ready`, `quit_app`). `render_and_grant` is the shared render+scope-grant tail used by both the file-open path and the live-preview path. |
+| `src-tauri/src/commands.rs` | The 10 Tauri commands (`open_markdown_file`, `drain_pending_files`, `markdown_extensions`, `read_markdown_source`, `render_markdown`, `save_markdown_file`, `save_markdown_file_as`, `mark_frontend_ready`, `quit_app`, `set_zoom`). `render_and_grant` is the shared render+scope-grant tail used by both the file-open path and the live-preview path. |
 | `src-tauri/src/files.rs` | Markdown-path validation (`is_markdown_path`/`require_markdown_path`/`normalize_markdown_path`) and the app's one filesystem write, `atomic_write`. |
 | `src-tauri/src/menu.rs` | The native File/Edit/View/Window/Help menu bar and its click handler. Hand-built rather than `tauri::menu::Menu::default()` — see the two menu invariants below for why. |
 | `src-tauri/build.rs` | Generates four CSS files from syntect's bundled themes at compile time: `src/code-theme-{light,dark}.css` (read-only preview) and `src/codemirror-theme-{light,dark}.css` (editor fence-token colors, via `Highlighter::style_for_stack` — see the two-theme-layer invariant below). Re-run `cargo build` after touching this — the generated files are gitignored-adjacent build output, not hand-edited. |
 | `src-tauri/tauri.conf.json` | `bundle.fileAssociations` is the **single source of truth** for which extensions this app handles — it drives the OS-level file association *and* is read back at runtime (`lib.rs`'s `configured_extensions`) for argv/drop filtering and the `markdown_extensions` command. Don't hardcode the extension list anywhere else. |
 | `src-tauri/icons/app-icon.svg` | The app icon's only hand-authored source (monoline "MD" monogram, pupil dot in the D's counter — on `--accent`, `src/styles.css`). Every other file in `src-tauri/icons/` is generated from it via `npm run icon`; don't hand-edit those. Letterforms are stroked `<path>`s, not `<text>` — `tauri icon` rasterizes with resvg and must not depend on system font resolution. The generator also writes `ios/`/`android/` subfolders and a `64x64.png`; delete the `ios`/`android` dirs after regenerating (this project is desktop-only, see below) — `64x64.png` is harmless unreferenced output, same as the `Square*Logo.png`/`StoreLogo.png` Windows Store assets `tauri.conf.json`'s `bundle.icon` doesn't list. |
-| `src/js/` | All frontend logic — tabs, TOC, find, theme, drag-drop, lazy-loading, edit mode (split-pane source + live preview) — split across 17 classic scripts (`tauri.js`, `helpers.js`, `dom.js`, `state.js`, `theme.js`, `loaders.js`, `toc.js`, `links.js`, `tabs.js`, `save.js`, `editor-commands.js`, `splitter.js`, `edit-mode.js`, `preview.js`, `find.js`, `modal.js`, `main.js`), loaded by `src/index.html` in that fixed order. See the "classic scripts, not ES modules" invariant below before touching load order or adding an 18th file. The only JS outside `src/vendor/`. |
+| `src/js/` | All frontend logic — tabs, TOC, find, theme, zoom, drag-drop, lazy-loading, edit mode (split-pane source + live preview) — split across 18 classic scripts (`tauri.js`, `helpers.js`, `dom.js`, `state.js`, `theme.js`, `zoom.js`, `loaders.js`, `toc.js`, `links.js`, `tabs.js`, `save.js`, `editor-commands.js`, `splitter.js`, `edit-mode.js`, `preview.js`, `find.js`, `modal.js`, `main.js`), loaded by `src/index.html` in that fixed order. See the "classic scripts, not ES modules" invariant below before touching load order or adding a 19th file. The only JS outside `src/vendor/`. |
 | `src/vendor/` | Mermaid + KaTeX + CodeMirror 5, vendored (no CDN, no npm dependency at runtime). Don't add a bundler to manage these. |
 | `fixtures/demo.md` | Exercises every rendering feature (tables, task lists, code, mermaid, math, footnotes, raw HTML) — use it to sanity-check rendering changes. |
 
@@ -253,6 +253,33 @@ existing rationale comments as a side effect of an unrelated change.
   `menu-action` listeners) is what makes the window still closable if the
   frontend never finishes loading.
 
+- **App-wide zoom uses the webview's native page zoom
+  (`commands.rs`'s `set_zoom` → `Webview::set_zoom`), never CSS `zoom`/
+  `transform: scale`.** CodeMirror 5 measures character cells via
+  `getBoundingClientRect`, which a transformed/zoomed ancestor breaks —
+  native page zoom is ordinary browser zoom, which the editor already
+  handles correctly. `tauri.conf.json`'s window config deliberately never
+  sets `zoomHotkeysEnabled`: that option injects a polyfill
+  (`zoom-hotkey.js`) with its own un-persisted zoom counter, which would
+  desync from this app's `js/zoom.js` state and double-step on every
+  keypress. `set_zoom` is a custom command rather than the core plugin's
+  `plugin:webview|set_webview_zoom` specifically to avoid adding
+  `core:webview:allow-set-webview-zoom` to `capabilities/default.json` — same
+  reasoning as `save_markdown_file` staying off `tauri-plugin-fs`. `WKWebView.setPageZoom:`
+  is macOS 11+, which is why `bundle.macOS.minimumSystemVersion` is `"11.0"`,
+  not `"10.15"`.
+  The native `View` menu accelerators (`menu.rs`'s `ZOOM_IN`/`ZOOM_OUT`,
+  `"CmdOrCtrl+Equal"`/`"CmdOrCtrl+Minus"`) and `js/main.js`'s keydown
+  branch for zoom are deliberately disjoint key sets, not two paths to the
+  same shortcut: the menu owns the unshifted main-row `=`/`-` keys, and the
+  JS branch only handles the shifted `+` (`Cmd+Shift+Equal`) and the numpad
+  Add/Subtract keys (matched by `e.code`, since `NumpadSubtract`'s `e.key`
+  is the same `"-"` string the menu's physical `Minus` key already owns).
+  "Actual Size" carries no accelerator at all — `Cmd/Ctrl+0` is already
+  `editor-commands.js`'s "clear heading" binding inside the editor, and a
+  macOS menu key equivalent is resolved by AppKit before the webview ever
+  sees the keystroke, which would silently kill that editor shortcut.
+
 - **`tauri_plugin_single_instance` is registered on Windows/Linux only**
   (`#[cfg(not(target_os = "macos"))]` in `lib.rs`). On macOS it forwards
   `argv` to an already-running instance — but a file opened via
@@ -265,7 +292,7 @@ existing rationale comments as a side effect of an unrelated change.
 
 - **The frontend is deliberately N classic scripts sharing one global
   lexical scope — not ES modules, not IIFEs.** `src/index.html` loads
-  `src/js/*.js` as 17 plain `<script src>` tags, in the fixed order listed
+  `src/js/*.js` as 18 plain `<script src>` tags, in the fixed order listed
   in the file map above. Two reasons this can't become `type="module"` or
   get wrapped: the JS test suite (`tests/harness.mjs`) evaluates the
   concatenated source and appends an epilogue that reads top-level

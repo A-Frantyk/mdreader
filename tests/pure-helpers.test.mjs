@@ -143,6 +143,37 @@ test("splitRatio", async (t) => {
   });
 });
 
+test("zoomFactor", async (t) => {
+  await t.test("defaults to 1 when nothing is stored", () => {
+    const { window } = freshApp();
+    assert.equal(window.zoomFactor(), 1);
+  });
+  await t.test("defaults to 1 for zero, negative, or non-numeric garbage", () => {
+    const { window } = freshApp();
+    for (const bad of ["0", "-1", "not-a-number", ""]) {
+      window.localStorage.setItem("mdreader.zoom", bad);
+      assert.equal(window.zoomFactor(), 1, `stored ${JSON.stringify(bad)} should fall back to default`);
+    }
+  });
+  await t.test("returns a stored value that's already an exact step unchanged", () => {
+    const { window } = freshApp();
+    window.localStorage.setItem("mdreader.zoom", "1.5");
+    assert.equal(window.zoomFactor(), 1.5);
+  });
+  await t.test("clamps an out-of-range stored value to the nearest end of the table", () => {
+    const { window } = freshApp();
+    window.localStorage.setItem("mdreader.zoom", "50");
+    assert.equal(window.zoomFactor(), 3);
+    window.localStorage.setItem("mdreader.zoom", "0.01");
+    assert.equal(window.zoomFactor(), 0.5);
+  });
+  await t.test("snaps an in-range but off-table value to the nearest step", () => {
+    const { window } = freshApp();
+    window.localStorage.setItem("mdreader.zoom", "1.08");
+    assert.equal(window.zoomFactor(), 1.1);
+  });
+});
+
 test("untitledTitle", async (t) => {
   await t.test("is 'Untitled' when no tab has claimed it", () => {
     const { window } = freshApp();

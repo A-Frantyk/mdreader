@@ -39,7 +39,7 @@
     "macOS": {
       "signingIdentity": "-",
       "hardenedRuntime": false,
-      "minimumSystemVersion": "10.15"
+      "minimumSystemVersion": "11.0"
     },
     "icon": [
       "icons/32x32.png",

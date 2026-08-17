@@ -231,11 +231,21 @@ test("handleMenuAction", async (t) => {
     window.openFileDialog = () => calls.push("open");
     window.saveTab = () => calls.push("save");
     window.requestQuit = () => calls.push("quit");
+    window.stepZoom = (direction) => calls.push(`step-zoom:${direction}`);
+    window.resetZoom = () => calls.push("reset-zoom");
 
-    for (const id of ["new", "open", "save", "quit"]) {
+    for (const id of ["new", "open", "save", "quit", "zoom-in", "zoom-out", "zoom-reset"]) {
       window.handleMenuAction(id);
     }
-    assert.deepEqual(calls, ["new", "open", "save", "quit"]);
+    assert.deepEqual(calls, [
+      "new",
+      "open",
+      "save",
+      "quit",
+      "step-zoom:1",
+      "step-zoom:-1",
+      "reset-zoom",
+    ]);
   });
 
   await t.test("does nothing for an unrecognized id", () => {

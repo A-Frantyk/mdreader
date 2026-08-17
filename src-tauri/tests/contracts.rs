@@ -45,7 +45,15 @@ fn repo_js_sources() -> String {
 fn menu_ids_match_the_frontend_switch() {
     let menu_rs = repo_file("src-tauri/src/menu.rs");
     let js = repo_js_sources();
-    for (const_name, id) in [("NEW", "new"), ("OPEN", "open"), ("SAVE", "save"), ("QUIT", "quit")] {
+    for (const_name, id) in [
+        ("NEW", "new"),
+        ("OPEN", "open"),
+        ("SAVE", "save"),
+        ("QUIT", "quit"),
+        ("ZOOM_IN", "zoom-in"),
+        ("ZOOM_OUT", "zoom-out"),
+        ("ZOOM_RESET", "zoom-reset"),
+    ] {
         let const_decl = format!("pub const {const_name}: &str = \"{id}\";");
         assert!(menu_rs.contains(&const_decl), "menu.rs is missing {const_decl:?}");
         let switch_case = format!("case \"{id}\":");

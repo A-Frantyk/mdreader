@@ -29,6 +29,9 @@ pub const NEW: &str = "new";
 pub const OPEN: &str = "open";
 pub const SAVE: &str = "save";
 pub const QUIT: &str = "quit";
+pub const ZOOM_IN: &str = "zoom-in";
+pub const ZOOM_OUT: &str = "zoom-out";
+pub const ZOOM_RESET: &str = "zoom-reset";
 
 pub fn build<R: Runtime>(handle: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     let pkg_info = handle.package_info();
@@ -79,6 +82,29 @@ pub fn build<R: Runtime>(handle: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         ],
     )?;
 
+    // Zoom items are plain custom `MenuItem`s, not `PredefinedMenuItem`s, so
+    // — unlike Minimize/Fullscreen/Quit below — muda doesn't silently drop
+    // them on Linux; the View menu is therefore built on every platform.
+    // Fullscreen is the one item still macOS-only, for that reason.
+    // "Actual Size" carries no accelerator: `CmdOrCtrl+0` is already
+    // `js/editor-commands.js`'s "clear heading" binding, and a macOS menu
+    // key equivalent is resolved by AppKit before the webview ever sees the
+    // keystroke, which would silently kill that editor shortcut.
+    let view_menu = Submenu::with_items(
+        handle,
+        "View",
+        true,
+        &[
+            &MenuItem::with_id(handle, ZOOM_IN, "Zoom In", true, Some("CmdOrCtrl+Equal"))?,
+            &MenuItem::with_id(handle, ZOOM_OUT, "Zoom Out", true, Some("CmdOrCtrl+Minus"))?,
+            &MenuItem::with_id(handle, ZOOM_RESET, "Actual Size", true, None::<&str>)?,
+            #[cfg(target_os = "macos")]
+            &PredefinedMenuItem::separator(handle)?,
+            #[cfg(target_os = "macos")]
+            &PredefinedMenuItem::fullscreen(handle, None)?,
+        ],
+    )?;
+
     // Window submenu carries only Minimize (no close_window, see the
     // module doc). macOS-only: on Linux muda drops unsupported predefined
     // items (including Minimize) silently, which would otherwise render as
@@ -122,8 +148,7 @@ pub fn build<R: Runtime>(handle: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             )?,
             &file_menu,
             &edit_menu,
-            #[cfg(target_os = "macos")]
-            &Submenu::with_items(handle, "View", true, &[&PredefinedMenuItem::fullscreen(handle, None)?])?,
+            &view_menu,
             #[cfg(target_os = "macos")]
             &window_menu,
             #[cfg(not(target_os = "macos"))]

@@ -66,6 +66,21 @@ function wireStaticUI() {
     } else if (mod && e.key.toLowerCase() === "s" && state.activeIndex !== -1) {
       e.preventDefault();
       saveTab(state.tabs[state.activeIndex]);
+    } else if (mod && e.key === "+") {
+      // Cmd/Ctrl+Equal and Cmd/Ctrl+Minus are native menu accelerators
+      // (menu.rs's ZOOM_IN/ZOOM_OUT), not handled here — this branch only
+      // covers the *shifted* "+" (Cmd+Shift+Equal on most layouts) and a
+      // numpad Add key, neither of which the menu accelerator's exact
+      // modifier match fires for. Disjoint by construction: nothing here
+      // can double-fire against a menu press.
+      e.preventDefault();
+      stepZoom(1);
+    } else if (mod && e.code === "NumpadSubtract") {
+      // NumpadSubtract's e.key is "-", identical to the main-row Minus key
+      // the menu accelerator already owns — checked by e.code, not e.key,
+      // so the two can't collide.
+      e.preventDefault();
+      stepZoom(-1);
     }
     // No branches for New/Open/Quit here, deliberately — those are
     // menu-only (see the "menu-action" listener in init). A double-fired
@@ -73,6 +88,26 @@ function wireStaticUI() {
     // app, so it gets exactly one trigger path instead of two racing
     // ones.
   });
+
+  // Ctrl+wheel is also how a macOS trackpad pinch arrives (as a wheel
+  // event with ctrlKey set, not a gesture event) — metaKey is deliberately
+  // ignored, since Cmd+scroll isn't a zoom convention anywhere. Accumulates
+  // deltas rather than stepping per-event: a trackpad fires many small
+  // events per gesture, and deltaMode 1 ("lines") is normalized to pixels
+  // first so the threshold means the same thing on either input device.
+  let wheelZoomAccum = 0;
+  window.addEventListener(
+    "wheel",
+    (e) => {
+      if (!e.ctrlKey || modalOpen) return;
+      e.preventDefault();
+      wheelZoomAccum += e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
+      if (Math.abs(wheelZoomAccum) < 40) return;
+      stepZoom(wheelZoomAccum < 0 ? 1 : -1);
+      wheelZoomAccum = 0;
+    },
+    { passive: false }
+  );
 
   els.editToggleBtn.addEventListener("click", toggleEditMode);
   els.saveBtn.addEventListener("click", () => saveTab(state.tabs[state.activeIndex]));
@@ -114,11 +149,24 @@ function handleMenuAction(id) {
     case "quit":
       requestQuit();
       break;
+    case "zoom-in":
+      stepZoom(1);
+      break;
+    case "zoom-out":
+      stepZoom(-1);
+      break;
+    case "zoom-reset":
+      resetZoom();
+      break;
   }
 }
 
 async function init() {
   await applyTheme(); // as early as possible, before anything else paints
+  // Unconditional, including at the default factor: the webview keeps its
+  // zoom level across a dev reload, so skipping this at factor 1 would
+  // leave a stale zoom from a previous session's reload stuck in place.
+  await applyZoom();
   wireStaticUI();
 
   els.openFileBtnMain.addEventListener("click", openFileDialog);

@@ -1,4 +1,4 @@
-//! The 9 Tauri IPC commands the frontend calls, plus the render+scope-grant
+//! The 10 Tauri IPC commands the frontend calls, plus the render+scope-grant
 //! tail shared by the file-open path and the live-preview path.
 
 use std::path::Path;
@@ -139,6 +139,35 @@ pub(crate) fn save_markdown_file_as(
 #[tauri::command]
 pub(crate) fn mark_frontend_ready(state: tauri::State<AppState>) {
     state.frontend_ready.store(true, Ordering::Relaxed);
+}
+
+pub(crate) const ZOOM_MIN: f64 = 0.5;
+pub(crate) const ZOOM_MAX: f64 = 3.0;
+
+/// `factor` round-trips through JS `localStorage` (a string) before it gets
+/// here, so this guards against corrupted/hand-edited storage the same way
+/// `js/splitter.js`'s `splitRatio` guards its own persisted number: NaN
+/// (parse failure) falls back to unzoomed rather than propagating into
+/// `Webview::set_zoom`, whose native backends aren't guaranteed to reject
+/// it gracefully.
+pub(crate) fn clamp_zoom(factor: f64) -> f64 {
+    if !factor.is_finite() {
+        return 1.0;
+    }
+    factor.clamp(ZOOM_MIN, ZOOM_MAX)
+}
+
+/// `tauri::Webview<R>` is a `CommandArg` (grabbed straight off the invoke
+/// message, `tauri-2.11.5/src/webview/mod.rs:2330`), so this needs no
+/// `AppHandle`/window lookup. Deliberately a custom command rather than the
+/// core plugin's `plugin:webview|set_webview_zoom`: that would need
+/// `core:webview:allow-set-webview-zoom` added to `capabilities/default.json`,
+/// widening the ACL surface a compromised webview (this app renders
+/// untrusted markdown) can reach for a single numeric setting. Same
+/// reasoning as `save_markdown_file` staying off `tauri-plugin-fs`.
+#[tauri::command]
+pub(crate) fn set_zoom(webview: tauri::Webview, factor: f64) -> Result<(), String> {
+    webview.set_zoom(clamp_zoom(factor)).map_err(|e| e.to_string())
 }
 
 /// The only sanctioned way this app ends itself. `AppHandle::exit` sends

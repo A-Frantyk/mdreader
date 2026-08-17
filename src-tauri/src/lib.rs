@@ -127,7 +127,8 @@ pub fn run() {
             commands::save_markdown_file,
             commands::save_markdown_file_as,
             commands::mark_frontend_ready,
-            commands::quit_app
+            commands::quit_app,
+            commands::set_zoom
         ])
         .build(context)
         .expect("error while building tauri application")

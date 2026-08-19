@@ -126,7 +126,6 @@ html, body {
 #new-tab-btn {
   flex: 0 0 auto;
   align-self: center;
-  border-left: 1px solid var(--border);
 }
 
 .tab {

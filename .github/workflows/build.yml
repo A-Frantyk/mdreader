@@ -121,9 +121,16 @@ jobs:
 
       # upload-artifact preserves directory structure starting at the
       # first wildcard segment in `path`, so installers are staged flat
-      # here first rather than globbed straight from target/. macOS's
-      # .app bundle is pruned — it's a directory tree, not the
-      # double-clickable installer (the .dmg next to it is).
+      # here first rather than globbed straight from target/. Filtered to
+      # these five installer extensions specifically, not every file under
+      # bundle/ — the bundler leaves packaging scaffolding sitting next to
+      # the real installer in the same directory (deb/'s unpacked
+      # control/data/debian-binary/md5sums plus the raw executable, dmg/'s
+      # bundle_dmg.sh/template.applescript/icon.icns/eula-resources-template.xml),
+      # and an unfiltered `-path '*/bundle/*' -type f` swept all of that
+      # into a real release once already — see git blame. macOS's .app
+      # bundle needs no separate prune under this filter: nothing in that
+      # directory tree matches any of these five extensions.
       #
       # Plain `find`, not a bash globstar loop: macos-latest's default
       # `bash` is the OS-shipped 3.2 (frozen there over GPLv3 licensing),
@@ -135,7 +142,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          find src-tauri/target -path '*/bundle/macos' -prune -o -path '*/bundle/*' -type f -exec cp {} dist/ \;
+          find src-tauri/target -path '*/bundle/*' -type f \( -name '*.dmg' -o -name '*.deb' -o -name '*.rpm' -o -name '*.exe' -o -name '*.msi' \) -exec cp {} dist/ \;
           ( cd dist && { command -v sha256sum >/dev/null 2>&1 && sha256sum * || shasum -a 256 *; } > SHA256SUMS-${{ matrix.name }}.txt )
           ls -la dist
 

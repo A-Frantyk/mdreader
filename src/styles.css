@@ -1,0 +1,713 @@
+:root {
+  --bg: #ffffff;
+  --bg-elevated: #f6f7f8;
+  --border: #e2e4e8;
+  --text: #1b1f24;
+  --text-muted: #616873;
+  --accent: #3568d4;
+  --accent-weak: #e8edfb;
+  --danger: #c0392b;
+  --code-bg: #f6f7f8;
+  --editor-bg: #faf8f3;
+  --editor-chrome: #f5f2ea;
+  --editor-grid: rgba(60, 50, 30, 0.06);
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+/* `data-theme` is always explicitly "light" or "dark" — no OS-follow
+   mode — so this is the only override needed alongside :root above. */
+:root[data-theme="dark"] {
+  --bg: #1b1e23;
+  --bg-elevated: #22262c;
+  --border: #33383f;
+  --text: #e6e8eb;
+  --text-muted: #9298a3;
+  --accent: #6d93ea;
+  --accent-weak: #26314a;
+  --code-bg: #22262c;
+  --editor-bg: #212227;
+  --editor-chrome: #1d1e23;
+  --editor-grid: rgba(255, 250, 240, 0.05);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.tabbar-row {
+  display: flex;
+  align-items: stretch;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+
+/* flex: 0 1 auto — hugs the tabs' own width (browser-tab-style, so "+"
+   sits right after the last tab) but still shrinks and scrolls
+   internally once tabs overflow, instead of pushing later controls
+   off-screen. */
+.tabbar {
+  display: flex;
+  align-items: stretch;
+  overflow-x: auto;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.tabbar-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 6px;
+  flex: 0 0 auto;
+  margin-left: auto; /* absorbs whatever width .tabbar no longer claims */
+  border-left: 1px solid var(--border);
+}
+
+.icon-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.icon-btn:hover {
+  background: var(--accent-weak);
+  color: var(--text);
+}
+
+.icon-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.icon-btn:disabled:hover {
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.icon-btn.active {
+  background: var(--accent-weak);
+  color: var(--accent);
+}
+
+/* display, not visibility — a reserved-but-invisible Save slot made Edit
+   look like it had drifted from its neighbors. Accepted trade-off: the
+   toolbar shifts a few px when Save appears/disappears. */
+.icon-btn.is-hidden {
+  display: none;
+}
+
+/* Outside .tabbar's own overflow-x:auto region, so it can't scroll away
+   with an overflowing tab strip. align-self overrides .tabbar-row's
+   align-items:stretch, which would otherwise top-align this instead of
+   centering it like the buttons in .tabbar-controls. */
+#new-tab-btn {
+  flex: 0 0 auto;
+  align-self: center;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px 8px 14px;
+  font-size: 13px;
+  color: var(--text-muted);
+  border-right: 1px solid var(--border);
+  cursor: pointer;
+  white-space: nowrap;
+  max-width: 220px;
+}
+
+.tab:hover { background: var(--accent-weak); }
+
+.tab.active {
+  background: var(--bg);
+  color: var(--text);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.tab-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tab-dirty {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex: 0 0 auto;
+}
+
+.tab-close {
+  border: none;
+  background: transparent;
+  color: inherit;
+  opacity: 0.6;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+
+.tab-close:hover {
+  opacity: 1;
+  background: rgba(128, 128, 128, 0.25);
+}
+
+.body {
+  flex: 1 1 auto;
+  display: flex;
+  min-height: 0;
+}
+
+.sidebar {
+  width: 240px;
+  flex: 0 0 auto;
+  border-right: 1px solid var(--border);
+  background: var(--bg-elevated);
+  overflow-y: auto;
+  padding: 12px 0;
+}
+
+.sidebar.hidden { display: none; }
+
+.sidebar-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding: 0 16px 8px;
+}
+
+.toc a {
+  display: block;
+  padding: 4px 16px;
+  font-size: 13px;
+  color: var(--text-muted);
+  text-decoration: none;
+  border-left: 2px solid transparent;
+}
+
+.toc a:hover { color: var(--text); }
+
+.toc a.active {
+  color: var(--accent);
+  border-left-color: var(--accent);
+  background: var(--accent-weak);
+}
+
+.toc a.level-2 { padding-left: 28px; }
+.toc a.level-3 { padding-left: 40px; }
+.toc a.level-4,
+.toc a.level-5,
+.toc a.level-6 { padding-left: 52px; }
+
+/* Does not itself scroll: each tab's .preview-scroll (and, in split
+   mode, .editor-pane) is its own independent scroll container, so the
+   two sides of a split can scroll separately. The TOC
+   IntersectionObserver root depends on scrolling happening per-tab. */
+.content-wrap {
+  flex: 1 1 auto;
+  position: relative;
+  overflow: hidden;
+}
+
+/* Persistent for the tab's lifetime — recreating this per activation
+   would break the "mermaid/KaTeX render once" invariant. */
+.tab-pane {
+  display: none;
+  height: 100%;
+}
+
+.tab-pane.visible {
+  display: flex;
+}
+
+/* Created lazily on first entry into split mode, never destroyed after
+   — toggling back to view-only and back to split again is free. */
+.editor-pane,
+.pane-splitter {
+  display: none;
+}
+
+.tab-pane.split .editor-pane {
+  /* Flex column: .editor-toolbar is a fixed-height row above CodeMirror's
+     wrapper, both children of .editor-pane in that DOM order (app.js's
+     createEditorToolbar depends on this order). flex-basis is
+     --split-ratio, set by attachSplitterDrag in app.js — grow:0 so this
+     side never grows past the ratio JS set (see .preview-scroll below
+     for the other half of this pairing). */
+  display: flex;
+  flex-direction: column;
+  flex: 0 1 var(--split-ratio, 50%);
+  min-width: 0;
+  height: 100%;
+  overflow: hidden; /* CodeMirror manages its own internal scroller */
+  border-right: 1px solid var(--border);
+}
+
+/* Paired with .editor-pane's flex-basis above: the editor takes the
+   explicit --split-ratio basis, the preview takes whatever's left via a
+   zero basis + grow:1. Sizing only one side is what keeps the two from
+   disagreeing about the total once the 6px splitter is subtracted. */
+.tab-pane.split .preview-scroll {
+  flex: 1 1 0;
+}
+
+.tab-pane.split .pane-splitter {
+  display: block;
+  position: relative; /* anchors the ::before hit-area below */
+  flex: 0 0 6px;
+  cursor: col-resize;
+  background: var(--border);
+  touch-action: none; /* a pointer drag here is a resize, not a scroll gesture */
+}
+
+/* Widens the *interactive* area to ~16px while leaving the visible seam
+   at 6px — a wider visible strip would read as a UI element rather than
+   a seam between panes. */
+.tab-pane.split .pane-splitter::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -5px;
+  right: -5px;
+}
+
+.pane-splitter:hover,
+.pane-splitter.dragging {
+  background: var(--accent);
+}
+
+/* Set on <body> by attachSplitterDrag only for the drag's duration, so
+   dragging fast past the divider doesn't flicker the cursor back to a
+   text I-beam, and text elsewhere doesn't get selected mid-drag. */
+body.is-splitting {
+  cursor: col-resize;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.editor-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 6px;
+  flex: 0 0 auto;
+  background: var(--editor-chrome);
+  border-bottom: 1px solid var(--border);
+  /* 14 buttons don't fit once the editor pane is halved by the split —
+     scroll horizontally rather than wrap (unpredictable vertical space)
+     or shrink buttons illegibly. */
+  overflow-x: auto;
+  flex-wrap: nowrap;
+}
+
+.editor-toolbar-sep {
+  width: 1px;
+  align-self: stretch;
+  background: var(--border);
+  margin: 0 4px;
+  flex: 0 0 auto;
+}
+
+/* min-height: 0 lets CodeMirror's own internal scroller handle overflow
+   instead of this item growing past its container (same flex-overflow
+   trap .body guards against above). */
+.editor-pane .CodeMirror {
+  flex: 1 1 auto;
+  min-height: 0;
+  font-family: var(--font-mono);
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+
+.preview-scroll {
+  flex: 1 1 50%;
+  min-width: 0;
+  height: 100%;
+  overflow-y: auto;
+  position: relative;
+}
+
+/* In split mode the 780px reading column (below) would leave a big
+   empty margin in a half-width pane. */
+.tab-pane.split .content {
+  max-width: none;
+  padding: 32px 28px 96px;
+}
+
+.empty-state {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  text-align: center;
+  gap: 4px;
+}
+
+.empty-state .hint { font-size: 13px; }
+
+.empty-actions {
+  display: flex;
+  gap: 8px;
+  margin: 8px 0 4px;
+}
+
+.empty-actions .open-btn { margin: 0; }
+
+.open-btn {
+  margin: 8px 0 4px;
+  padding: 10px 22px;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: inherit;
+  color: #fff;
+  background: var(--accent);
+  /* Transparent, not none: reserves the same 1px .open-btn.secondary
+     spends on a real border, so primary/secondary pairs stay equal
+     height (Open File… vs Create, Save vs Don't Save/Cancel). */
+  border: 1px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.open-btn:hover { filter: brightness(1.08); }
+.open-btn:active { filter: brightness(0.95); }
+
+.open-btn.secondary {
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--border);
+}
+
+.open-btn.secondary:hover { filter: none; background: var(--accent-weak); }
+.open-btn.secondary:active { filter: none; background: var(--border); }
+
+/* Scoped to .empty-actions, not .open-btn.secondary generally, so it
+   doesn't also recolor the modal's Don't Save/Cancel — those share the
+   same base classes but shouldn't visually claim equal weight with Save. */
+.empty-actions .open-btn.secondary {
+  border-color: var(--accent);
+}
+
+.content {
+  max-width: 780px;
+  margin: 0 auto;
+  padding: 48px 32px 96px;
+  font-family: var(--font);
+  font-size: 16px;
+  line-height: 1.65;
+}
+
+/* A welcome tab's contentEl holds a cloned .empty-state (buildWelcomePane
+   in app.js), whose height:100% needs a definite-height ancestor to
+   center against — .content's default height is auto, so without this
+   the welcome screen renders top-aligned instead of centered. Removed by
+   convertWelcomeTab before real rendered HTML ever lands here. */
+.content.welcome {
+  height: 100%;
+  max-width: none;
+  padding: 0;
+}
+
+.content h1, .content h2, .content h3,
+.content h4, .content h5, .content h6 {
+  font-weight: 600;
+  line-height: 1.3;
+  margin: 1.6em 0 0.6em;
+  scroll-margin-top: 16px;
+}
+
+.content h1 { font-size: 1.85em; border-bottom: 1px solid var(--border); padding-bottom: 0.3em; }
+.content h2 { font-size: 1.4em; border-bottom: 1px solid var(--border); padding-bottom: 0.25em; }
+.content h3 { font-size: 1.15em; }
+.content h1:first-child, .content h2:first-child { margin-top: 0; }
+
+.content .anchor {
+  float: left;
+  margin-left: -1.1em;
+  padding-right: 0.25em;
+  color: var(--text-muted);
+  text-decoration: none;
+  opacity: 0;
+}
+
+.content h1:hover .anchor,
+.content h2:hover .anchor,
+.content h3:hover .anchor,
+.content h4:hover .anchor,
+.content h5:hover .anchor,
+.content h6:hover .anchor { opacity: 1; }
+
+.content p, .content ul, .content ol, .content blockquote,
+.content table, .content .code-block, .content .mermaid {
+  margin: 0.9em 0;
+}
+
+.content a { color: var(--accent); }
+
+/* A resolved local link (render.rs's data-path, not href — see CLAUDE.md's
+   path-resolution invariant) carries no href, so it gets no pointer cursor
+   for free the way a normal <a href> does. role="link" tabindex="0"
+   (also render.rs) restores keyboard focus; this restores the cursor. */
+.content a[data-path] { cursor: pointer; }
+
+.content img, .content svg { max-width: 100%; }
+
+.content blockquote {
+  margin-left: 0;
+  padding: 0.2em 1em;
+  border-left: 3px solid var(--border);
+  color: var(--text-muted);
+}
+
+.content code {
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  background: var(--code-bg);
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+}
+
+.content pre.code-block {
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 16px;
+  overflow-x: auto;
+}
+
+.content pre.code-block code {
+  background: none;
+  padding: 0;
+  font-size: 0.85em;
+  line-height: 1.55;
+}
+
+.content pre.mermaid {
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  text-align: center;
+  overflow-x: auto;
+}
+
+.content table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.92em;
+}
+
+.content th, .content td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+
+.content th { background: var(--bg-elevated); }
+
+.content input[type="checkbox"] { margin-right: 0.4em; }
+
+.content mark.find-hit {
+  background: #ffe083;
+  color: #1b1f24;
+  border-radius: 2px;
+}
+
+.content mark.find-hit.current {
+  background: var(--accent);
+  color: #fff;
+}
+
+.content .render-error {
+  color: var(--danger);
+  font-family: var(--font-mono);
+  white-space: pre-wrap;
+}
+
+.findbar {
+  display: none;
+  position: absolute;
+  top: 44px;
+  right: 16px;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
+  z-index: 20;
+}
+
+.findbar.visible { display: flex; }
+
+.findbar input {
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  outline: none;
+  width: 200px;
+}
+
+.findbar button {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.findbar button:hover { background: rgba(128, 128, 128, 0.2); color: var(--text); }
+
+.find-count {
+  font-size: 12px;
+  color: var(--text-muted);
+  min-width: 3.5em;
+}
+
+/* Two CodeMirror theme layers applied simultaneously (enterSplitMode's
+   `theme: "mdreader mdreader-syntax"` in app.js), with deliberately
+   disjoint selectors so neither fights the other over which rule wins.
+   This block (`cm-s-mdreader`) owns editor chrome plus markdown-
+   structural tokens; `cm-s-mdreader-syntax` (generated by build.rs's
+   generate_codemirror_theme_css, from the same syntect theme the
+   read-only preview uses) owns code-token colors only.
+
+   Three token classes are markdown.js's own reuse of CodeMirror's
+   shared vocabulary for non-code purposes, so they're owned here, not
+   by the generated theme: `cm-comment` is inline `` `code` `` spans,
+   `cm-variable-2` is nested list markers, `cm-tag` is raw HTML embedded
+   in prose. generate_codemirror_theme_css deliberately emits no rules
+   for these three — don't add any there. */
+.cm-s-mdreader.CodeMirror {
+  background-color: var(--editor-bg);
+  /* Stationary, not scrolling with the text: .CodeMirror-scroll is
+     transparent and sits above this wrapper, so the grid can't shimmer or
+     force a repaint while typing. Putting it on .CodeMirror-lines instead
+     would scroll with the text but stop at the last line, leaving a visible
+     cutoff on short documents. Size is decorative, deliberately not locked
+     to the computed line-box height (13.5px * 1.55 below) — a stationary
+     grid drifts out of phase with the text regardless, so matching it would
+     only look like a near-miss. */
+  background-image: radial-gradient(var(--editor-grid) 1px, transparent 1px);
+  background-size: 22px 22px;
+  color: var(--text);
+}
+
+.cm-s-mdreader .CodeMirror-gutters {
+  background: var(--editor-chrome);
+  border-right: 1px solid var(--border);
+}
+
+.cm-s-mdreader .CodeMirror-linenumber {
+  color: var(--text-muted);
+}
+
+.cm-s-mdreader .CodeMirror-cursor {
+  border-left: 1px solid var(--text);
+}
+
+.cm-s-mdreader .CodeMirror-selected,
+.cm-s-mdreader .CodeMirror-line::selection,
+.cm-s-mdreader .CodeMirror-line > span::selection {
+  background: var(--accent-weak);
+}
+
+.cm-s-mdreader .cm-header { color: var(--accent); font-weight: 600; }
+.cm-s-mdreader .cm-strong { font-weight: 600; }
+.cm-s-mdreader .cm-em { font-style: italic; }
+.cm-s-mdreader .cm-link,
+.cm-s-mdreader .cm-url { color: var(--accent); }
+.cm-s-mdreader .cm-quote { color: var(--text-muted); font-style: italic; }
+.cm-s-mdreader .cm-comment { color: var(--text-muted); }
+.cm-s-mdreader .cm-variable-2 { color: var(--text); }
+.cm-s-mdreader .cm-tag { color: var(--text); }
+
+.drop-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  color: var(--accent);
+  background: rgba(53, 104, 212, 0.08);
+  border: 3px dashed var(--accent);
+  z-index: 50;
+  pointer-events: none;
+}
+
+.drop-overlay.visible { display: flex; }
+
+.modal-backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.35);
+  z-index: 100;
+}
+
+.modal-backdrop.visible { display: flex; }
+
+.modal {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
+  padding: 20px;
+  max-width: 360px;
+  width: calc(100% - 32px);
+}
+
+.modal-message {
+  margin: 0 0 16px;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.modal-actions .open-btn { margin: 0; padding: 8px 16px; font-size: 13px; }

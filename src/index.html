@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>mdreader</title>
+    <!-- href swapped between code-theme-light.css / code-theme-dark.css by
+         js/theme.js's setCodeThemeLink, per the resolved theme. -->
+    <link rel="stylesheet" href="code-theme-light.css" id="code-theme" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <div class="tabbar-row">
+        <div class="tabbar" id="tabbar" role="tablist" aria-label="Open documents"></div>
+        <button id="new-tab-btn" class="icon-btn is-hidden" title="New tab (Cmd/Ctrl+N)">+</button>
+        <div class="tabbar-controls">
+          <button id="edit-toggle-btn" class="icon-btn is-hidden" title="Edit (Cmd/Ctrl+E)" disabled>&#9998;</button>
+          <button id="save-btn" class="icon-btn is-hidden" title="Save (Cmd/Ctrl+S)" disabled>&#128190;</button>
+          <button id="theme-btn" class="icon-btn" title="Theme"></button>
+        </div>
+      </div>
+
+      <div class="body">
+        <aside class="sidebar hidden" id="sidebar">
+          <div class="sidebar-title">Outline</div>
+          <nav class="toc" id="toc"></nav>
+        </aside>
+
+        <main class="content-wrap" id="content-wrap">
+          <div id="empty-state" class="empty-state">
+            <p>No document open.</p>
+            <div class="empty-actions">
+              <button id="open-file-btn-main" class="open-btn">Open File…</button>
+              <button id="new-btn-main" class="open-btn secondary">Create</button>
+            </div>
+            <p class="hint">or drop a Markdown file here, or open one from your file manager.</p>
+          </div>
+        </main>
+      </div>
+
+      <div class="findbar" id="findbar">
+        <input id="find-input" type="text" placeholder="Find in document" autocomplete="off" />
+        <span class="find-count" id="find-count"></span>
+        <button id="find-prev" title="Previous match (Shift+Enter)">&uarr;</button>
+        <button id="find-next" title="Next match (Enter)">&darr;</button>
+        <button id="find-close" title="Close (Esc)">&times;</button>
+      </div>
+
+      <div class="drop-overlay" id="drop-overlay">Drop to open</div>
+
+      <!-- Cloned into a welcome tab's contentEl by buildWelcomePane in
+           js/tabs.js — same screen as #empty-state above, but with
+           data-action attributes instead of ids: a cloned <template>
+           can't reuse ids (several welcome tabs can be open at once). Keep
+           this in sync with #empty-state by hand if that one ever changes;
+           kept as a separate declaration rather than sharing one node
+           since #empty-state is a singleton and this isn't. -->
+      <template id="welcome-pane-template">
+        <div class="empty-state">
+          <p>No document open.</p>
+          <div class="empty-actions">
+            <button type="button" class="open-btn" data-action="open-file">Open File…</button>
+            <button type="button" class="open-btn secondary" data-action="create">Create</button>
+          </div>
+          <p class="hint">or drop a Markdown file here, or open one from your file manager.</p>
+        </div>
+      </template>
+
+      <div class="modal-backdrop" id="modal-backdrop">
+        <div class="modal" role="alertdialog" aria-modal="true" aria-labelledby="modal-message">
+          <p class="modal-message" id="modal-message"></p>
+          <div class="modal-actions">
+            <button id="modal-save" class="open-btn">Save</button>
+            <button id="modal-dont-save" class="open-btn secondary">Don't Save</button>
+            <button id="modal-cancel" class="open-btn secondary">Cancel</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Classic scripts sharing one global lexical scope, deliberately not
+         ES modules — see CLAUDE.md's "the frontend is N classic scripts"
+         invariant. Load order matters only for the handful of things that
+         run at load time rather than inside a later function call:
+         js/dom.js's `els` must precede js/toc.js and js/links.js (both
+         register listeners on `els.*` at load), and js/main.js must be
+         last (it ends with a bare `init();`). -->
+    <script src="js/tauri.js"></script>
+    <script src="js/helpers.js"></script>
+    <script src="js/dom.js"></script>
+    <script src="js/state.js"></script>
+    <script src="js/theme.js"></script>
+    <script src="js/zoom.js"></script>
+    <script src="js/loaders.js"></script>
+    <script src="js/toc.js"></script>
+    <script src="js/links.js"></script>
+    <script src="js/tabs.js"></script>
+    <script src="js/save.js"></script>
+    <script src="js/editor-commands.js"></script>
+    <script src="js/splitter.js"></script>
+    <script src="js/edit-mode.js"></script>
+    <script src="js/preview.js"></script>
+    <script src="js/find.js"></script>
+    <script src="js/modal.js"></script>
+    <script src="js/main.js"></script>
+  </body>
+</html>

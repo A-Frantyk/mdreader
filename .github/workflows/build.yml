@@ -1,0 +1,184 @@
+name: Build
+
+# Produces per-platform installers as downloadable artifacts. Pushing a
+# `v*` tag additionally publishes them as a GitHub Release.
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+# Least-privilege default for every job's GITHUB_TOKEN. Only the `release`
+# job needs more (its own block below). Third-party actions are pinned to
+# full commit SHAs (trailing comment = the tag/branch resolved from) so a
+# moved or compromised upstream ref can't change what runs here —
+# dependabot (.github/dependabot.yml) proposes the bumps.
+permissions:
+  contents: read
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ubuntu-22.04, windows-latest, macos-latest]
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install Linux system dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable (branch, not a version tag)
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: cargo check
+        run: cargo check --manifest-path src-tauri/Cargo.toml --all-targets --locked
+
+      - name: cargo test
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: npm test
+        run: npm test
+
+  build:
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            name: macos
+            args: '--target universal-apple-darwin'
+          - platform: ubuntu-22.04
+            name: linux
+            # deb/rpm only — no AppImage. Two reasons: (1) Tauri's
+            # AppImage bundler downloads five tools at bundle time
+            # (AppRun, linuxdeploy, two plugin scripts, an optional
+            # plugin AppImage) with zero retry logic, which flaked CI
+            # with a transient `io: Peer disconnected` — an unretried
+            # network fetch sitting directly in front of the release job
+            # (release: needs: build). (2) AppImage can't register the
+            # .md file association anyway (no .desktop-file install step
+            # the way deb/rpm packaging gets via update-desktop-database)
+            # — the app's whole premise on Linux. README already tells
+            # Linux users to install via deb/rpm for that reason.
+            args: '--bundles deb rpm'
+          - platform: windows-latest
+            name: windows
+            args: ''
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install Linux system dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable (branch, not a version tag)
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install frontend dependencies
+        run: npm install
+
+      - name: Build
+        run: npm run tauri build -- ${{ matrix.args }}
+
+      # upload-artifact preserves directory structure starting at the
+      # first wildcard segment in `path`, so installers are staged flat
+      # here first rather than globbed straight from target/. macOS's
+      # .app bundle is pruned — it's a directory tree, not the
+      # double-clickable installer (the .dmg next to it is).
+      #
+      # Plain `find`, not a bash globstar loop: macos-latest's default
+      # `bash` is the OS-shipped 3.2 (frozen there over GPLv3 licensing),
+      # and `globstar` needs bash 4+ — `shell: bash` steps run with `-e`,
+      # so `shopt -s globstar` failing would abort the step outright.
+      # `find`'s `-prune`/`-o`/`-exec` are POSIX and behave the same under
+      # GNU find (Linux, Windows via Git Bash) and BSD find (macOS).
+      - name: Stage installer(s) for upload
+        shell: bash
+        run: |
+          mkdir -p dist
+          find src-tauri/target -path '*/bundle/macos' -prune -o -path '*/bundle/*' -type f -exec cp {} dist/ \;
+          ( cd dist && { command -v sha256sum >/dev/null 2>&1 && sha256sum * || shasum -a 256 *; } > SHA256SUMS-${{ matrix.name }}.txt )
+          ls -la dist
+
+      - name: Upload installer
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: mdreader-${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+
+  # Separate from `build` because it needs all three platforms' artifacts
+  # downloaded together before it can publish.
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download all platform installers
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: artifacts
+
+      - name: Flatten into one release directory
+        run: |
+          mkdir -p release
+          find artifacts -type f -exec mv {} release/ \;
+          ls -la release
+
+      # Public-repo only: GitHub's attestation API rejects private-repo
+      # requests. continue-on-error keeps that from blocking the Release
+      # publish below — drop it once the repo goes public.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        continue-on-error: true
+        with:
+          subject-path: 'release/*'
+
+      - name: Publish release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          files: release/*
+          generate_release_notes: true

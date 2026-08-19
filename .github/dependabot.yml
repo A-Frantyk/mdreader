@@ -1,0 +1,18 @@
+# Vendored browser libs under src/vendor/ (mermaid, KaTeX, CodeMirror) are
+# NOT covered — they're checked in, not package-managed; bump those by
+# hand.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /src-tauri
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

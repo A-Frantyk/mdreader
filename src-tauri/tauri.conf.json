@@ -1,0 +1,65 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "mdreader",
+  "version": "0.1.0",
+  "identifier": "com.mdreader.app",
+  "build": {
+    "frontendDist": "../src"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "mdreader",
+        "width": 980,
+        "height": 720,
+        "minWidth": 480,
+        "minHeight": 320,
+        "dragDropEnabled": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost data: https: http:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none'",
+      "assetProtocol": {
+        "enable": true,
+        "scope": []
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "publisher": "Andrii Frantyk",
+    "copyright": "Copyright © 2026 Andrii Frantyk",
+    "homepage": "https://github.com/A-Frantyk/mdreader",
+    "category": "Productivity",
+    "shortDescription": "Lightweight Markdown viewer and editor",
+    "longDescription": "A fast, cross-platform desktop Markdown viewer and editor with live preview, mermaid diagrams, and math rendering.",
+    "licenseFile": "../LICENSE",
+    "macOS": {
+      "signingIdentity": "-",
+      "hardenedRuntime": false,
+      "minimumSystemVersion": "11.0"
+    },
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "fileAssociations": [
+      {
+        "ext": ["md", "markdown", "mdown", "mkd"],
+        "name": "Markdown Document",
+        "description": "Markdown Document",
+        "role": "Editor",
+        "mimeType": "text/markdown",
+        "exportedType": {
+          "identifier": "com.mdreader.markdown",
+          "conformsTo": ["public.plain-text"]
+        }
+      }
+    ]
+  }
+}

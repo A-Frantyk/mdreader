@@ -80,28 +80,90 @@ fn menu_never_offers_close_window() {
 
 /// The generated CodeMirror syntax theme and the hand-written chrome
 /// theme in styles.css must own disjoint token-class selectors — see
-/// build.rs's generate_codemirror_theme_css doc comment. If both define
-/// the same class, which one wins depends on stylesheet link order; this
-/// was caught and fixed once already.
+/// build.rs's generate_codemirror_theme_css doc comment. They're disjoint
+/// by *namespace* now (edit-mode.js's tokenTypeOverrides renames every
+/// Markdown token to `cm-md-*`), not by a hardcoded list of classes
+/// styles.css keeps for itself, so this asserts the contract both
+/// directions without hardcoding which classes those are: whatever plain
+/// CodeMirror classes the generated theme actually defines, styles.css
+/// must not also define a `.cm-s-mdreader .cm-<that class>` rule for; and
+/// styles.css's own cm-md-* namespace must never leak into the generated
+/// file. If both ever did define the same class, which one wins would
+/// depend on stylesheet link order — this was caught and fixed once
+/// already, on the previous hardcoded-list version of this contract.
 #[test]
 fn generated_codemirror_themes_avoid_selectors_owned_by_styles_css() {
     let styles_css = repo_file("src/styles.css");
-    let owned_by_styles_css = ["cm-comment", "cm-variable-2", "cm-tag"];
-    for class in owned_by_styles_css {
-        assert!(
-            styles_css.contains(&format!(".{class}")),
-            "styles.css no longer defines .{class} — is the disjoint-selector split still needed?"
-        );
-    }
 
     for generated in ["src/codemirror-theme-light.css", "src/codemirror-theme-dark.css"] {
         let css = repo_file(generated);
-        for class in owned_by_styles_css {
+        assert!(
+            !css.contains("cm-md-"),
+            "{generated} defines a cm-md-* class — that namespace belongs to styles.css alone"
+        );
+
+        for line in css.lines() {
+            let Some(class_start) = line.find(".cm-s-mdreader-syntax .cm-") else { continue };
+            let rest = &line[class_start + ".cm-s-mdreader-syntax .".len()..];
+            let class = rest.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-')).next().unwrap_or("");
+            assert!(!class.is_empty(), "couldn't parse a class name out of {generated} line {line:?}");
+            let collision = format!(".cm-s-mdreader .{class} {{");
             assert!(
-                !css.contains(&format!(".{class} {{")),
-                "{generated} defines .{class}, which styles.css also owns — dueling same-specificity selectors"
+                !styles_css.contains(&collision),
+                "styles.css defines {collision}, which {generated} also owns as .cm-s-mdreader-syntax .{class} — \
+                 dueling same-specificity selectors"
             );
         }
+    }
+}
+
+/// Every `--syntax-*` custom property styles.css reads must be defined in
+/// *both* generated palettes — build.rs's syntax_root_css. A typo'd
+/// property name degrades silently to its `var()` fallback rather than
+/// erroring, so this is the only thing that would catch one.
+#[test]
+fn syntax_custom_properties_defined_in_both_themes() {
+    let styles_css = repo_file("src/styles.css");
+    let light = repo_file("src/code-theme-light.css");
+    let dark = repo_file("src/code-theme-dark.css");
+
+    let mut checked = 0;
+    let mut idx = 0;
+    while let Some(pos) = styles_css[idx..].find("var(--syntax-") {
+        let start = idx + pos + "var(".len();
+        let name_end = styles_css[start..]
+            .find(|c: char| c == ',' || c == ')')
+            .map(|n| start + n)
+            .unwrap_or(styles_css.len());
+        let name = &styles_css[start..name_end];
+        for (file_name, css) in [("code-theme-light.css", &light), ("code-theme-dark.css", &dark)] {
+            assert!(
+                css.contains(&format!("{name}:")),
+                "styles.css references {name}, which src/{file_name} does not define"
+            );
+        }
+        checked += 1;
+        idx = name_end;
+    }
+    assert!(checked > 0, "expected styles.css to reference at least one --syntax-* property");
+}
+
+/// A broken VS Code JSON → syntect `Theme` conversion (build.rs's
+/// `load_vscode_theme`) could silently drop almost every scope — e.g. a
+/// panic-free `.and_then` chain returning `None` everywhere — without the
+/// build failing. Both vendored themes define 200+ tokenColors entries;
+/// a healthy conversion should carry the overwhelming majority of them
+/// through as distinct CSS rules.
+#[test]
+fn generated_code_theme_css_has_substantial_rule_count() {
+    for file in ["src/code-theme-light.css", "src/code-theme-dark.css"] {
+        let css = repo_file(file);
+        let rule_count = css.matches(" {\n").count();
+        assert!(
+            rule_count > 50,
+            "{file} only has {rule_count} rules — the VS Code theme JSON → syntect Theme \
+             conversion may be dropping most scopes"
+        );
     }
 }
 

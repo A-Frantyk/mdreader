@@ -358,7 +358,7 @@ body.is-splitting {
   position: relative;
 }
 
-/* In split mode the 780px reading column (below) would leave a big
+/* In split mode the centered reading column (below) would leave a big
    empty margin in a half-width pane. */
 .tab-pane.split .content {
   max-width: none;
@@ -422,7 +422,7 @@ body.is-splitting {
 }
 
 .content {
-  max-width: 780px;
+  max-width: clamp(780px, 72vw, 1100px);
   margin: 0 auto;
   padding: 48px 32px 96px;
   font-family: var(--font);
@@ -713,7 +713,7 @@ body.is-splitting {
 .modal-actions .open-btn { margin: 0; padding: 8px 16px; font-size: 13px; }
 
 /* Anchors are otherwise only styled under .content a — needed here for the
-   About dialog's GitHub/Patreon/monobank links. */
+   About dialog's GitHub/PayPal/monobank links. */
 .modal a { color: var(--accent); }
 
 .modal .hint { font-size: 13px; color: var(--text-muted); }

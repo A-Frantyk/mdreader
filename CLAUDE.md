@@ -21,7 +21,7 @@ planned; `#[cfg_attr(mobile, ...)]` in `lib.rs`/`main.rs` is inert
 | `src-tauri/build.rs` | Generates four CSS files from syntect's bundled themes at compile time: `src/code-theme-{light,dark}.css` (read-only preview) and `src/codemirror-theme-{light,dark}.css` (editor fence-token colors, via `Highlighter::style_for_stack` — see the two-theme-layer invariant below). Re-run `cargo build` after touching this — the generated files are gitignored-adjacent build output, not hand-edited. |
 | `src-tauri/tauri.conf.json` | `bundle.fileAssociations` is the **single source of truth** for which extensions this app handles — it drives the OS-level file association *and* is read back at runtime (`lib.rs`'s `configured_extensions`) for argv/drop filtering and the `markdown_extensions` command. Don't hardcode the extension list anywhere else. |
 | `src-tauri/icons/app-icon.svg` | The app icon's only hand-authored source (monoline "MD" monogram, pupil dot in the D's counter — on `--accent`, `src/styles.css`). Every other file in `src-tauri/icons/` is generated from it via `npm run icon`; don't hand-edit those. Letterforms are stroked `<path>`s, not `<text>` — `tauri icon` rasterizes with resvg and must not depend on system font resolution. The generator also writes `ios/`/`android/` subfolders and a `64x64.png`; delete the `ios`/`android` dirs after regenerating (this project is desktop-only, see below) — `64x64.png` is harmless unreferenced output, same as the `Square*Logo.png`/`StoreLogo.png` Windows Store assets `tauri.conf.json`'s `bundle.icon` doesn't list. |
-| `src/js/` | All frontend logic — tabs, TOC, find, theme, zoom, drag-drop, lazy-loading, edit mode (split-pane source + live preview) — split across 18 classic scripts (`tauri.js`, `helpers.js`, `dom.js`, `state.js`, `theme.js`, `zoom.js`, `loaders.js`, `toc.js`, `links.js`, `tabs.js`, `save.js`, `editor-commands.js`, `splitter.js`, `edit-mode.js`, `preview.js`, `find.js`, `modal.js`, `main.js`), loaded by `src/index.html` in that fixed order. See the "classic scripts, not ES modules" invariant below before touching load order or adding a 19th file. The only JS outside `src/vendor/`. |
+| `src/js/` | All frontend logic — tabs, TOC, find, theme, zoom, drag-drop, lazy-loading, edit mode (split-pane source + live preview) — split across 18 classic scripts (`tauri.js`, `helpers.js`, `dom.js`, `state.js`, `theme.js`, `zoom.js`, `loaders.js`, `toc.js`, `links.js`, `tabs.js`, `save.js`, `editor-commands.js`, `splitter.js`, `edit-mode.js`, `preview.js`, `find.js`, `modal.js`, `main.js`), loaded by `src/index.html` in that fixed order. See the "classic scripts, not ES modules" invariant below before touching load order or adding a 19th file. The only JS outside `src/vendor/`. `modal.js` owns both of the app's modals — the three-button unsaved-changes one and the About dialog (`#about-backdrop`) — and the welcome-screen support link is hand-synced between `index.html`'s `#empty-state` and `#welcome-pane-template`, same as the rest of that pair's markup. |
 | `src/vendor/` | Mermaid + KaTeX + CodeMirror 5, vendored (no CDN, no npm dependency at runtime). Don't add a bundler to manage these. |
 | `fixtures/demo.md` | Exercises every rendering feature (tables, task lists, code, mermaid, math, footnotes, raw HTML) — use it to sanity-check rendering changes. |
 
@@ -219,6 +219,12 @@ existing rationale comments as a side effect of an unrelated change.
   `js/main.js`'s global keydown handler) and close the whole window instead.
   `menu.rs` hand-builds every submenu instead, and omits `close_window`
   everywhere. Don't add it back, and don't switch back to `Menu::default()`.
+  `PredefinedMenuItem::about` is likewise replaced with a custom `ABOUT`
+  id, because macOS's `NSAboutPanel` (what the predefined item renders)
+  can't host a clickable link — About now opens an app-controlled HTML
+  dialog (`index.html`'s `#about-backdrop`, wired in `js/modal.js`/
+  `js/main.js`) through the same `menu-action` string-event pipe every
+  other menu action already uses.
 
 - **Quit routes through a custom menu item (`menu.rs`'s `QUIT`), never
   `PredefinedMenuItem::quit`.** Traced through the `tauri`/`muda`/`tao`

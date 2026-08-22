@@ -30,8 +30,32 @@ function wireStaticUI() {
     if (e.target === els.modalBackdrop) modalResolve?.("cancel");
   });
 
+  els.aboutClose.addEventListener("click", closeAbout);
+  els.aboutBackdrop.addEventListener("click", (e) => {
+    const a = e.target.closest("a[href]");
+    if (a) {
+      e.preventDefault();
+      tauri.opener.openUrl(a.getAttribute("href")).catch((err) =>
+        console.error("failed to open url", err)
+      );
+      return;
+    }
+    if (e.target === els.aboutBackdrop) closeAbout();
+  });
+
   document.addEventListener("keydown", (e) => {
     if (e.isComposing) return; // IME composition — not a real shortcut keystroke
+
+    // Same reasoning as the modalOpen block below: no native focus trap,
+    // and a native menu press isn't blocked by a DOM backdrop at all.
+    // About only has one button, so just Escape.
+    if (aboutOpen) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        closeAbout();
+      }
+      return;
+    }
 
     // The modal has no native focus trap (it's plain DOM, not <dialog>),
     // and a native menu press isn't blocked by a DOM backdrop at all (see
@@ -99,7 +123,7 @@ function wireStaticUI() {
   window.addEventListener(
     "wheel",
     (e) => {
-      if (!e.ctrlKey || modalOpen) return;
+      if (!e.ctrlKey || modalOpen || aboutOpen) return;
       e.preventDefault();
       wheelZoomAccum += e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
       if (Math.abs(wheelZoomAccum) < 40) return;
@@ -135,7 +159,7 @@ async function wireDragDrop() {
 /// global keydown handler: a native menu press isn't blocked by the
 /// modal's DOM backdrop at all.
 function handleMenuAction(id) {
-  if (modalOpen) return;
+  if (modalOpen || aboutOpen) return;
   switch (id) {
     case "new":
       newWelcomeTab();
@@ -157,6 +181,9 @@ function handleMenuAction(id) {
       break;
     case "zoom-reset":
       resetZoom();
+      break;
+    case "about":
+      openAbout();
       break;
   }
 }

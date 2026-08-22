@@ -54,7 +54,8 @@ const APP_JS_BODY = APP_JS_SOURCE.replace(TRAILING_INIT_CALL, "\n");
 // one-time copy) for the primitive `let`s that app.js's own functions
 // reassign during a test (markdownExtensions, modalOpen, quitting,
 // newDocInFlight) — a plain property copy here would go stale the moment
-// internal code did `markdownExtensions = new Set(...)`.
+// internal code did `markdownExtensions = new Set(...)`. `aboutOpen` is
+// included for the same reason as `modalOpen`.
 const EPILOGUE = `
 window.__testExports = {
   els, state, inFlight, find, darkQuery,
@@ -65,6 +66,8 @@ window.__testExports = {
   ZOOM_KEY, ZOOM_DEFAULT, ZOOM_STEPS,
   get modalOpen() { return modalOpen; },
   set modalOpen(v) { modalOpen = v; },
+  get aboutOpen() { return aboutOpen; },
+  set aboutOpen(v) { aboutOpen = v; },
   get quitting() { return quitting; },
   get newDocInFlight() { return newDocInFlight; },
 };
@@ -119,6 +122,9 @@ function defaultTauriStub() {
     core: {
       invoke: async () => undefined,
       convertFileSrc: (p) => `asset://localhost/${p}`,
+    },
+    app: {
+      getVersion: async () => "0.0.0-test",
     },
     dialog: {
       open: async () => null,

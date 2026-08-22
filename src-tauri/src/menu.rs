@@ -22,7 +22,7 @@
 use tauri::menu::HELP_SUBMENU_ID;
 #[cfg(target_os = "macos")]
 use tauri::menu::WINDOW_SUBMENU_ID;
-use tauri::menu::{AboutMetadata, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Emitter, Runtime};
 
 pub const NEW: &str = "new";
@@ -32,17 +32,10 @@ pub const QUIT: &str = "quit";
 pub const ZOOM_IN: &str = "zoom-in";
 pub const ZOOM_OUT: &str = "zoom-out";
 pub const ZOOM_RESET: &str = "zoom-reset";
+pub const ABOUT: &str = "about";
 
 pub fn build<R: Runtime>(handle: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     let pkg_info = handle.package_info();
-    let config = handle.config();
-    let about_metadata = AboutMetadata {
-        name: Some(pkg_info.name.clone()),
-        version: Some(pkg_info.version.to_string()),
-        copyright: config.bundle.copyright.clone(),
-        authors: config.bundle.publisher.clone().map(|p| vec![p]),
-        ..Default::default()
-    };
 
     let quit = MenuItem::with_id(handle, QUIT, "Quit mdreader", true, Some("CmdOrCtrl+Q"))?;
 
@@ -124,7 +117,7 @@ pub fn build<R: Runtime>(handle: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         HELP_SUBMENU_ID,
         "Help",
         true,
-        &[&PredefinedMenuItem::about(handle, None, Some(about_metadata.clone()))?],
+        &[&MenuItem::with_id(handle, ABOUT, "About mdreader", true, None::<&str>)?],
     )?;
 
     Menu::with_items(
@@ -136,7 +129,7 @@ pub fn build<R: Runtime>(handle: &AppHandle<R>) -> tauri::Result<Menu<R>> {
                 pkg_info.name.clone(),
                 true,
                 &[
-                    &PredefinedMenuItem::about(handle, None, Some(about_metadata))?,
+                    &MenuItem::with_id(handle, ABOUT, "About mdreader", true, None::<&str>)?,
                     &PredefinedMenuItem::separator(handle)?,
                     &PredefinedMenuItem::services(handle, None)?,
                     &PredefinedMenuItem::separator(handle)?,

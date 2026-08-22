@@ -1,4 +1,6 @@
-// The three-button unsaved-changes modal and the quit sequence that drives it.
+// The three-button unsaved-changes modal and the quit sequence that drives
+// it, plus the About dialog (a second, simpler modal reusing the same
+// .modal-backdrop/.modal CSS).
 
 // ---------------------------------------------------------------------
 // Unsaved-changes modal + quit sequence. This is the app's first custom
@@ -61,4 +63,28 @@ async function requestQuit() {
   } finally {
     quitting = false;
   }
+}
+
+// ---------------------------------------------------------------------
+// About dialog. Opened via the native menu's ABOUT id (menu.rs) — see
+// handleMenuAction in js/main.js. `aboutOpen` is checked by the same
+// global keydown handler and menu-action dispatcher as `modalOpen`, for
+// the same reason: a native menu press isn't blocked by any DOM backdrop.
+// ---------------------------------------------------------------------
+let aboutOpen = false;
+let aboutPreviouslyFocused = null;
+
+async function openAbout() {
+  aboutPreviouslyFocused = document.activeElement;
+  aboutOpen = true;
+  els.aboutVersion.textContent = `Version ${await tauri.app.getVersion()}`;
+  els.aboutBackdrop.classList.add("visible");
+  els.aboutClose.focus();
+}
+
+function closeAbout() {
+  aboutOpen = false;
+  els.aboutBackdrop.classList.remove("visible");
+  if (aboutPreviouslyFocused instanceof HTMLElement) aboutPreviouslyFocused.focus();
+  aboutPreviouslyFocused = null;
 }

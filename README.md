@@ -233,6 +233,28 @@ Produces a native installer under `src-tauri/target/release/bundle/`:
 The extension list, MIME type, and per-OS metadata all come from one
 place: `bundle.fileAssociations` in `src-tauri/tauri.conf.json`.
 
+## Support
+
+mdreader is free and MIT-licensed, and that's not changing. If it's useful
+to you, two things would help fund it further:
+
+- An Apple Developer certificate (~$99/year) to notarize macOS builds —
+  right now the app is only ad-hoc signed, so first launch needs a trip
+  through System Settings → Privacy & Security → Open Anyway instead of
+  just opening normally.
+- A Windows code-signing certificate, so installers stop triggering a
+  SmartScreen "unrecognized publisher" warning.
+
+Neither is required for the app to work — they're quality-of-life fixes
+for people installing it for the first time.
+
+Support is entirely optional and has no effect on the app itself — no
+paid tier, no feature gating, ever.
+
+- [PayPal](https://www.paypal.com/donate/?business=ifrantya%40gmail.com) — one-time or recurring
+- [monobank jar](https://send.monobank.ua/jar/9jmpz3bVHs) — for supporters in
+  Ukraine
+
 ## Tech stack
 
 | | |

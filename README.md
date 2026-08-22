@@ -30,12 +30,28 @@ This is a hobby project with no code-signing budget, so both OSes will
 warn on first run — the source and CI build logs are public/inspectable,
 but neither install is backed by a paid trust certificate:
 
-- **macOS** — the app is ad-hoc signed, not notarized, so Gatekeeper shows
-  "cannot be opened because the developer cannot be verified." Right-click
-  the app → **Open** (or System Settings → Privacy & Security → **Open
-  Anyway**) once, and it launches normally after. If macOS instead calls it
-  "damaged," it usually means quarantine wasn't cleared by the click above;
-  run `xattr -dr com.apple.quarantine /Applications/mdreader.app` once.
+- **macOS** — the app is ad-hoc signed, not notarized (notarization needs
+  a paid Apple Developer Program membership; no free substitute exists),
+  so first launch shows **"mdreader" Not Opened. Apple could not verify
+  "mdreader" is free of malware...**. macOS 15 (Sequoia) removed the old
+  Control-click → Open bypass, so on current macOS you clear it via
+  **System Settings → Privacy & Security**: click **Done** on the dialog,
+  open Privacy & Security, scroll to the Security section, click **Open
+  Anyway** (it's only offered for about an hour after the block), and
+  confirm once more. It launches normally every time after.
+
+  Or skip the dialog entirely with the install script, which downloads
+  the latest release, verifies its checksum, and strips the quarantine
+  flag that triggers the Gatekeeper check in the first place:
+
+  ```bash
+  curl -fsSL -o install-macos.sh https://raw.githubusercontent.com/A-Frantyk/mdreader/main/scripts/install-macos.sh
+  less install-macos.sh   # read it before running anything downloaded from the internet
+  sh install-macos.sh
+  ```
+
+  Manual equivalent, once the `.dmg` is already in `/Applications`:
+  `xattr -dr com.apple.quarantine /Applications/mdreader.app`.
 - **Windows** — SmartScreen shows "Windows protected your PC" because the
   installer isn't signed by a paid CA certificate. Click **More info** →
   **Run anyway**.
@@ -206,8 +222,10 @@ Produces a native installer under `src-tauri/target/release/bundle/`:
   (`bundle.macOS.signingIdentity: "-"` in `tauri.conf.json` — required so
   the universal `lipo` step doesn't leave the binary's signature broken,
   which macOS treats as "damaged" rather than just "unidentified") but not
-  notarized, so it still needs a right-click → Open on first launch to
-  pass Gatekeeper.
+  notarized, so first launch still needs one trip through **System
+  Settings → Privacy & Security → Open Anyway** to pass Gatekeeper (see
+  "Download & install" above — macOS 15 removed the old right-click → Open
+  bypass).
 - **Linux** — `.deb` and `.rpm`, each shipping a `.desktop` file with
   `MimeType=text/markdown`. Install via the system package manager so
   `update-desktop-database` runs and the file manager picks it up.

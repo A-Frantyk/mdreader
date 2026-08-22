@@ -119,6 +119,21 @@ jobs:
       - name: Build
         run: npm run tauri build -- ${{ matrix.args }}
 
+      # Regression guard for the signingIdentity: "-" invariant
+      # (tauri.conf.json / CLAUDE.md): the universal `lipo` step is
+      # exactly what can leave the binary's ad-hoc signature broken,
+      # which macOS reports as "damaged" — not recoverable by any
+      # Gatekeeper override, unlike the expected unnotarized-app prompt.
+      # `--verify` must pass; `-dvvv`/`spctl` are logged only, since
+      # spctl rejecting an unnotarized app here is expected, not a bug.
+      - name: Verify macOS code signature
+        if: matrix.platform == 'macos-latest'
+        run: |
+          APP=src-tauri/target/universal-apple-darwin/release/bundle/macos/mdreader.app
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          codesign -dvvv "$APP" || true
+          spctl -a -t exec -vv "$APP" || true
+
       # upload-artifact preserves directory structure starting at the
       # first wildcard segment in `path`, so installers are staged flat
       # here first rather than globbed straight from target/. Filtered to
@@ -164,6 +179,10 @@ jobs:
       id-token: write
       attestations: write
     steps:
+      # Needed to pick up scripts/install-macos.sh below — this job
+      # otherwise only handles artifacts from the `build` job.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
       - name: Download all platform installers
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -173,6 +192,7 @@ jobs:
         run: |
           mkdir -p release
           find artifacts -type f -exec mv {} release/ \;
+          cp scripts/install-macos.sh release/
           ls -la release
 
       # Public-repo only: GitHub's attestation API rejects private-repo
@@ -184,8 +204,32 @@ jobs:
         with:
           subject-path: 'release/*'
 
+      # A supplied body is prepended to the auto-generated changelog
+      # (generate_release_notes: true), not replaced by it — this is
+      # deliberately here rather than only in README.md, since the
+      # person hitting the Gatekeeper prompt is on this page, not in
+      # the repo's docs.
       - name: Publish release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: release/*
           generate_release_notes: true
+          body: |
+            ## First launch
+
+            - **macOS** — ad-hoc signed, not notarized (no paid Apple
+              Developer Program membership; no free substitute exists), so
+              first launch shows *"Apple could not verify ... is free of
+              malware"*. Clear it via **System Settings → Privacy & Security
+              → Open Anyway** (macOS 15 removed the old right-click → Open
+              bypass), or skip the dialog entirely with the bundled
+              `install-macos.sh` below — download it, read it, then
+              `sh install-macos.sh`. It verifies the `.dmg`'s checksum,
+              installs to `/Applications`, and clears the quarantine flag
+              that triggers the prompt.
+            - **Windows** — SmartScreen shows "Windows protected your PC"
+              because the installer isn't signed by a paid CA certificate.
+              Click **More info → Run anyway**.
+
+            See the [README](https://github.com/A-Frantyk/mdreader#download--install)
+            for full details.

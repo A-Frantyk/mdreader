@@ -341,9 +341,11 @@ instead of launching your new one.
   universal-apple-darwin`'s `lipo` step invalidates each arch's implicit
   ad-hoc signature — without an explicit identity, Tauri skips
   `codesign` entirely and Apple Silicon refuses to launch the result at
-  all ("app is damaged," not recoverable by right-click → Open). Ad-hoc
+  all ("app is damaged," not recoverable by any Gatekeeper override). Ad-hoc
   signing downgrades that to the ordinary "unidentified developer"
-  prompt, which right-click → Open does clear. `hardenedRuntime` is
+  prompt, cleared via System Settings → Privacy & Security → Open Anyway
+  (macOS 15 removed the old right-click → Open bypass — see README.md's
+  "Download & install"). `hardenedRuntime` is
   explicitly set to `false` there too (the schema default is `true`) —
   hardened runtime only pays off once notarized, and without a matching
   entitlements file it can break the webview's JIT. If an Apple

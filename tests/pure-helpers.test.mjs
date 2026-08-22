@@ -2,6 +2,9 @@
 // IPC — just string/number logic plus (for a few) localStorage/matchMedia.
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 import { freshApp } from "./harness.mjs";
 
 test("basename", async (t) => {
@@ -227,5 +230,39 @@ test("debounce", async (t) => {
     assert.deepEqual(calls, [], "should not have fired yet");
     t.mock.timers.tick(50);
     assert.deepEqual(calls, [["second"]]);
+  });
+});
+
+test("MARKDOWN_TOKEN_TYPES stays in sync with the vendored markdown.js", async (t) => {
+  await t.test("covers every key in markdown.js's own tokenTypes table, all md-prefixed", () => {
+    const { app } = freshApp();
+    const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
+    const markdownJs = readFileSync(
+      path.join(repoRoot, "src/vendor/codemirror/mode/markdown/markdown.js"),
+      "utf8",
+    );
+
+    // markdown.js's own `var tokenTypes = { key: "value", ... };` object
+    // literal — see edit-mode.js's tokenTypeOverrides invariant (CLAUDE.md)
+    // for why every key here needs an md-prefixed override: any key this
+    // app forgets to override falls through to markdown.js's own default,
+    // colliding with the generated CodeMirror code theme's classes.
+    const match = markdownJs.match(/var tokenTypes = \{([\s\S]*?)\};/);
+    assert.ok(match, "couldn't find markdown.js's `var tokenTypes = {...}` literal — did the vendored file change shape?");
+    const keys = [...match[1].matchAll(/^\s*(\w+):/gm)].map((m) => m[1]);
+    assert.ok(keys.length > 5, "sanity check: expected markdown.js to define several token types");
+
+    for (const key of keys) {
+      assert.ok(
+        Object.hasOwn(app.MARKDOWN_TOKEN_TYPES, key),
+        `MARKDOWN_TOKEN_TYPES is missing an override for markdown.js's "${key}" token type`,
+      );
+      assert.match(
+        app.MARKDOWN_TOKEN_TYPES[key],
+        /^md-/,
+        `MARKDOWN_TOKEN_TYPES.${key} ("${app.MARKDOWN_TOKEN_TYPES[key]}") isn't md-prefixed — it can still collide \
+with a plain CodeMirror class the generated code theme owns`,
+      );
+    }
   });
 });

@@ -18,7 +18,8 @@ planned; `#[cfg_attr(mobile, ...)]` in `lib.rs`/`main.rs` is inert
 | `src-tauri/src/commands.rs` | The 10 Tauri commands (`open_markdown_file`, `drain_pending_files`, `markdown_extensions`, `read_markdown_source`, `render_markdown`, `save_markdown_file`, `save_markdown_file_as`, `mark_frontend_ready`, `quit_app`, `set_zoom`). `render_and_grant` is the shared render+scope-grant tail used by both the file-open path and the live-preview path. |
 | `src-tauri/src/files.rs` | Markdown-path validation (`is_markdown_path`/`require_markdown_path`/`normalize_markdown_path`) and the app's one filesystem write, `atomic_write`. |
 | `src-tauri/src/menu.rs` | The native File/Edit/View/Window/Help menu bar and its click handler. Hand-built rather than `tauri::menu::Menu::default()` — see the two menu invariants below for why. |
-| `src-tauri/build.rs` | Generates four CSS files from syntect's bundled themes at compile time: `src/code-theme-{light,dark}.css` (read-only preview) and `src/codemirror-theme-{light,dark}.css` (editor fence-token colors, via `Highlighter::style_for_stack` — see the two-theme-layer invariant below). Re-run `cargo build` after touching this — the generated files are gitignored-adjacent build output, not hand-edited. |
+| `src-tauri/build.rs` | Converts the two vendored VS Code theme JSON files (`themes/`) into syntect `Theme`s and generates four CSS files at compile time: `src/code-theme-{light,dark}.css` (read-only preview's fence colors, plus a `:root { --syntax-* }` palette the editor pane and preview fences both consume) and `src/codemirror-theme-{light,dark}.css` (editor fence-token colors, via `Highlighter::style_for_stack` — see the theme-sourcing and two-theme-layer invariants below). Re-run `cargo build` after touching this — the generated files are gitignored-adjacent build output, not hand-edited. |
+| `src-tauri/themes/` | The two vendored VS Code theme JSON files (One Dark Pro / One Light) `build.rs` converts at compile time, plus `LICENSE-THEMES.md` (both MIT). Vendored verbatim, same as `src/vendor/` — don't hand-edit; if either theme is ever swapped, replace the JSON and re-run `cargo build`. |
 | `src-tauri/tauri.conf.json` | `bundle.fileAssociations` is the **single source of truth** for which extensions this app handles — it drives the OS-level file association *and* is read back at runtime (`lib.rs`'s `configured_extensions`) for argv/drop filtering and the `markdown_extensions` command. Don't hardcode the extension list anywhere else. |
 | `src-tauri/icons/app-icon.svg` | The app icon's only hand-authored source (monoline "MD" monogram, pupil dot in the D's counter — on `--accent`, `src/styles.css`). Every other file in `src-tauri/icons/` is generated from it via `npm run icon`; don't hand-edit those. Letterforms are stroked `<path>`s, not `<text>` — `tauri icon` rasterizes with resvg and must not depend on system font resolution. The generator also writes `ios/`/`android/` subfolders and a `64x64.png`; delete the `ios`/`android` dirs after regenerating (this project is desktop-only, see below) — `64x64.png` is harmless unreferenced output, same as the `Square*Logo.png`/`StoreLogo.png` Windows Store assets `tauri.conf.json`'s `bundle.icon` doesn't list. |
 | `src/js/` | All frontend logic — tabs, TOC, find, theme, zoom, drag-drop, lazy-loading, edit mode (split-pane source + live preview) — split across 18 classic scripts (`tauri.js`, `helpers.js`, `dom.js`, `state.js`, `theme.js`, `zoom.js`, `loaders.js`, `toc.js`, `links.js`, `tabs.js`, `save.js`, `editor-commands.js`, `splitter.js`, `edit-mode.js`, `preview.js`, `find.js`, `modal.js`, `main.js`), loaded by `src/index.html` in that fixed order. See the "classic scripts, not ES modules" invariant below before touching load order or adding a 19th file. The only JS outside `src/vendor/`. `modal.js` owns both of the app's modals — the three-button unsaved-changes one and the About dialog (`#about-backdrop`) — and the welcome-screen support link is hand-synced between `index.html`'s `#empty-state` and `#welcome-pane-template`, same as the rest of that pair's markup. |
@@ -109,25 +110,91 @@ existing rationale comments as a side effect of an unrelated change.
   feature, follow the same pattern (a boolean flag from Rust, a memoized
   loader promise in JS).
 
-- **The editor's two CodeMirror theme layers own disjoint CSS selectors —
-  don't merge them.** `enterSplitMode` sets `theme: "mdreader mdreader-syntax"`
-  (CodeMirror applies both as separate classes on the same wrapper
-  simultaneously — verified against `lib/codemirror.js`'s theme option
-  handler, not assumed). `cm-s-mdreader` (hand-written, `styles.css`) owns
-  chrome — background, base text, gutters, cursor, selection — plus
-  markdown-*structural* tokens bridged to this app's own design tokens.
+- **The editor's two CodeMirror theme layers are disjoint by *namespace*,
+  not by a hand-picked class list — don't merge them, and don't add a
+  third scheme.** `enterSplitMode` (`edit-mode.js`) sets
+  `theme: "mdreader mdreader-syntax"` (CodeMirror applies both as separate
+  classes on the same wrapper simultaneously — verified against
+  `lib/codemirror.js`'s theme option handler, not assumed) *and* passes
+  `mode: { name: "gfm", highlightFormatting: true, tokenTypeOverrides:
+  MARKDOWN_TOKEN_TYPES }`. `MARKDOWN_TOKEN_TYPES` (`edit-mode.js`, next to
+  `createEditorToolbar`) renames every key in markdown.js's own
+  `tokenTypes` table to an `md-`-prefixed class, so Markdown's structural
+  tokens (`cm-md-header`, `cm-md-strong`, `cm-md-link`, `cm-md-punct`, …)
+  can never collide with a plain CodeMirror code-token class — freeing the
+  *entire* CodeMirror vocabulary for the generated theme, rather than the
+  three classes (`cm-comment`/`cm-variable-2`/`cm-tag`) it used to have to
+  avoid. `cm-s-mdreader` (hand-written, `styles.css`) owns chrome —
+  background, gutters, cursor, selection — plus every `cm-md-*` rule.
   `cm-s-mdreader-syntax` (generated by `build.rs`'s
-  `generate_codemirror_theme_css`, from the *same* syntect `ThemeSet` the
-  read-only preview uses) owns only code-token colors, so a document's
-  fence colors match whether you're viewing or editing it. Three token
-  classes — `cm-comment`, `cm-variable-2`, `cm-tag` — are deliberately
-  owned by the hand-written side only, even though a real language mode
-  would also use all three: `markdown.js` reuses them for its own
-  non-code purposes (inline `` `code` `` spans, nested list markers, HTML
-  embedded in prose). Adding a rule for any of these three to the
-  generated theme creates two same-specificity selectors whose winner
-  depends on stylesheet link order — this was caught and fixed once
-  already; don't reintroduce it.
+  `generate_codemirror_theme_css`, from the *same* two vendored themes the
+  read-only preview uses — see the theme-sourcing invariant below) owns
+  only plain CodeMirror code-token classes, so a document's fence colors
+  match whether you're viewing or editing it.
+  `tests/pure-helpers.test.mjs` asserts `MARKDOWN_TOKEN_TYPES` covers every
+  key markdown.js defines and that every value is `md-`-prefixed — the
+  guarantee is only as good as that map being complete, and a future
+  CodeMirror bump could add a token type silently.
+  `highlightFormatting: true` is load-bearing, not cosmetic: markdown.js
+  defaults it *off*, which means a syntax marker (`#`, `**`, `>`, `` ` ``,
+  `[]()`, list bullets) shares its content's own token class with no way
+  to style the marker differently — turning it on, plus `cm-md-punct`
+  being declared *last* in styles.css's `.cm-s-mdreader` block (same
+  specificity as every content rule above it, so source order decides the
+  winner on a token that carries both classes), is what makes the editor
+  read as flat, source-first text instead of a second copy of the preview.
+  Four token classes are hardcoded by markdown.js/gfm.js *outside*
+  `tokenTypeOverrides`' reach — `meta`/`property` (task checkboxes) and a
+  bare `url`/`link` (autolinks, image alt text) — and are styled directly
+  by their original names in `styles.css`, each with a comment explaining
+  which token emits them. The task-checkbox rule needs an extra
+  specificity bump (`.cm-s-mdreader.CodeMirror .cm-meta`, not
+  `.cm-s-mdreader .cm-meta`) for a reason worth internalizing: unlike
+  `code-theme-*.css` (linked eagerly, before `styles.css`, in
+  `index.html`), `codemirror-theme-*.css` is only injected into `<head>`
+  lazily on first editor open (`loaders.js`'s `ensureCodeMirror`) — i.e.
+  *after* `styles.css` — so on equal specificity the generated theme's
+  `cm-meta`/`cm-property` rule (if the current theme pair happens to
+  define one) would win every tie without it.
+
+- **Both syntax themes come from two vendored VS Code theme JSON files,
+  not syntect's bundled `ThemeSet::load_defaults()` — and their names are
+  deliberately never surfaced in the UI.** `src-tauri/themes/one-dark-pro.json`
+  / `one-light.json` are vendored verbatim (MIT, see
+  `themes/LICENSE-THEMES.md`; same no-CDN policy as `src/vendor/`).
+  `build.rs`'s `load_vscode_theme` converts one into a syntect `Theme`
+  directly — a VS Code theme's `tokenColors` array *is* a TextMate scope
+  table, so each entry's `scope`/`settings.foreground`/`settings.background`
+  maps straight onto `ThemeItem`/`StyleModifier`, no plist round-trip
+  needed. `settings.fontStyle` is deliberately never read: the editor's
+  Markdown tokens render flat by design (previous invariant), and
+  `css_for_theme_with_class_style`'s own output (the read-only preview)
+  never emits it either. An unparseable scope or a non-token (scopeless)
+  `tokenColors` entry is skipped with a `cargo:warning`, never a panic —
+  one odd entry in a 200+-rule upstream file must not break the build.
+  `generate_code_theme_css` additionally prepends a `:root { --syntax-*: …
+  }` block (`syntax_root_css`) to `code-theme-{light,dark}.css` — chrome
+  values (`--syntax-bg`/`-fg`/`-gutter-bg`/`-gutter-fg`/`-selection`/
+  `-caret`/`-line-highlight`) straight from the theme's `ThemeSettings`,
+  plus a handful of Markdown-scope lookups (`--syntax-md-header`, `-strong`,
+  `-list`, …) resolved through the *same* `Highlighter::style_for_stack`
+  call the code-token generator uses, so a color is never hand-picked
+  where the theme itself defines one. This lives in `code-theme-*.css`
+  specifically (not `codemirror-theme-*.css`) because it's linked eagerly
+  in `index.html` and swapped by `theme.js`'s `setCodeThemeLink`, so the
+  properties exist from first paint — `codemirror-theme-*.css` is only
+  injected lazily on first editor open and can't host a token the preview
+  pane's fence background needs in a session that never opens the editor.
+  The corollary: because `styles.css` is linked *after* `code-theme-*.css`,
+  it must never redefine any `--syntax-*` name in its own `:root` — that
+  would win the cascade and pin every theme to whichever was linked last.
+  It only ever reads them as `var(--syntax-x, var(--editor-x))`, with the
+  pre-existing `--editor-*`/`--text-*`/`--code-bg` tokens kept purely as
+  fallbacks. `tests/contracts.rs`'s
+  `syntax_custom_properties_defined_in_both_themes` and
+  `generated_code_theme_css_has_substantial_rule_count` guard against a
+  typo'd property name (silently degrades to its fallback, no error) and a
+  broken conversion (silently drops most scopes) respectively.
 
 - **The write path is one narrow, validated command — not
   `tauri-plugin-fs`.** `save_markdown_file` (`commands.rs`) is the app's

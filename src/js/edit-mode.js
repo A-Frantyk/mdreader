@@ -1,5 +1,37 @@
 // Entering/exiting split (view+editor) mode for a tab.
 
+// Renames every Markdown token markdown.js/gfm.js would otherwise emit
+// under a shared CodeMirror vocabulary (cm-header, cm-string, cm-keyword,
+// ...) to its own md-prefixed namespace. This is what lets
+// codemirror-theme-{light,dark}.css (build.rs's generate_codemirror_theme_css,
+// code-token colors) and styles.css's cm-md-* rules (Markdown structure)
+// own disjoint classes by construction, instead of the old scheme of
+// hand-picking three classes for markdown.js to keep — see the
+// two-theme-layer invariant in CLAUDE.md. Keys are exactly
+// markdown.js's tokenTypes table; tests/pure-helpers.test.mjs asserts
+// this stays in sync with the vendored mode if it's ever upgraded.
+const MARKDOWN_TOKEN_TYPES = {
+  header: "md-header",
+  code: "md-code",
+  quote: "md-quote",
+  list1: "md-list",
+  list2: "md-list",
+  list3: "md-list",
+  hr: "md-hr",
+  image: "md-image",
+  imageAltText: "md-image-alt",
+  imageMarker: "md-image-marker",
+  formatting: "md-punct",
+  linkInline: "md-link",
+  linkEmail: "md-link",
+  linkText: "md-link",
+  linkHref: "md-href",
+  em: "md-em",
+  strong: "md-strong",
+  strikethrough: "md-strike",
+  emoji: "md-emoji",
+};
+
 /// Builds the formatting toolbar for `tab`'s editor pane. Must be
 /// appended into editorPane *before* `new CodeMirror(...)` — CodeMirror's
 /// constructor appends its own wrapper rather than replacing container
@@ -83,7 +115,12 @@ async function enterSplitMode(tab) {
     try {
       tab.editor = new window.CodeMirror(editorPane, {
         value: tab.source,
-        mode: "gfm",
+        // highlightFormatting: markdown.js defaults this off, which means
+        // a syntax marker (#, **, >, `, [](), list bullets) shares its
+        // content's own token class — with no way to style the marker
+        // dimmer than the text it wraps. Turning it on is what makes
+        // "flat, source-first" possible at all; see CLAUDE.md.
+        mode: { name: "gfm", highlightFormatting: true, tokenTypeOverrides: MARKDOWN_TOKEN_TYPES },
         theme: "mdreader mdreader-syntax",
         lineWrapping: true,
         lineNumbers: true,

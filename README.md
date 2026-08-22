@@ -75,8 +75,9 @@ mdreader/
 │  │  │                   Tauri commands, plugin registration
 │  │  ├─ render.rs        Markdown → sanitized HTML (the core pipeline)
 │  │  └─ main.rs          Stock 3-line Tauri bin entry point
-│  ├─ build.rs            Generates src/code-theme-{light,dark}.css from
-│  │                      syntect's bundled themes at compile time
+│  ├─ build.rs            Generates the four code-theme-*/codemirror-
+│  │                      theme-*.css files from themes/ at compile time
+│  ├─ themes/             Vendored One Dark Pro / One Light theme JSON
 │  ├─ tauri.conf.json     Window config + bundle.fileAssociations (the
 │  │                      config that makes OS file-association work)
 │  └─ capabilities/       Tauri's permission manifest for the webview
@@ -262,7 +263,7 @@ paid tier, no feature gating, ever.
 | App shell | [Tauri v2](https://v2.tauri.app/) (Rust + the OS's native webview — WebView2/WKWebView/WebKitGTK) |
 | Backend language | Rust |
 | Markdown parsing | [pulldown-cmark](https://docs.rs/pulldown-cmark) |
-| Syntax highlighting | [syntect](https://docs.rs/syntect) |
+| Syntax highlighting | [syntect](https://docs.rs/syntect), themed from [One Dark Pro](https://github.com/Binaryify/OneDark-Pro) and [One Light](https://github.com/akamud/vscode-theme-onelight) (both MIT, vendored — see `src-tauri/themes/LICENSE-THEMES.md`) |
 | Sanitization | [ammonia](https://docs.rs/ammonia) |
 | Frontend | Vanilla HTML/CSS/JavaScript — no framework, no bundler |
 | Diagrams | [Mermaid](https://mermaid.js.org/) (vendored, lazy-loaded) |

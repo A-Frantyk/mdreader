@@ -35,6 +35,11 @@
               <button id="new-btn-main" class="open-btn secondary">Create</button>
             </div>
             <p class="hint">or drop a Markdown file here, or open one from your file manager.</p>
+            <p class="hint">
+              Support this project via
+              <a href="https://www.paypal.com/donate/?business=ifrantya%40gmail.com">PayPal</a>
+              or <a href="https://send.monobank.ua/jar/9jmpz3bVHs">monobank jar</a>.
+            </p>
           </div>
         </main>
       </div>
@@ -64,6 +69,11 @@
             <button type="button" class="open-btn secondary" data-action="create">Create</button>
           </div>
           <p class="hint">or drop a Markdown file here, or open one from your file manager.</p>
+          <p class="hint">
+            Support this project via
+            <a href="https://www.paypal.com/donate/?business=ifrantya%40gmail.com">PayPal</a>
+            or <a href="https://send.monobank.ua/jar/9jmpz3bVHs">monobank jar</a>.
+          </p>
         </div>
       </template>
 
@@ -74,6 +84,27 @@
             <button id="modal-save" class="open-btn">Save</button>
             <button id="modal-dont-save" class="open-btn secondary">Don't Save</button>
             <button id="modal-cancel" class="open-btn secondary">Cancel</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- About dialog — see src-tauri/src/menu.rs's ABOUT id and the
+           "menu-action" listener in js/main.js. Custom rather than
+           PredefinedMenuItem::about because NSAboutPanel (macOS's native
+           About box) can't host a clickable link. -->
+      <div class="modal-backdrop" id="about-backdrop">
+        <div class="modal" role="dialog" aria-modal="true" aria-labelledby="about-title">
+          <p class="modal-message" id="about-title">mdreader</p>
+          <p id="about-version"></p>
+          <p>MIT — Copyright (c) 2026 Andrii Frantyk</p>
+          <p><a href="https://github.com/A-Frantyk/mdreader">github.com/A-Frantyk/mdreader</a></p>
+          <p class="hint">
+            If mdreader is useful to you, voluntary support is welcome:
+            <a href="https://www.paypal.com/donate/?business=ifrantya%40gmail.com">PayPal</a> ·
+            <a href="https://send.monobank.ua/jar/9jmpz3bVHs">monobank jar</a>
+          </p>
+          <div class="modal-actions">
+            <button id="about-close" class="open-btn">Close</button>
           </div>
         </div>
       </div>

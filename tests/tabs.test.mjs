@@ -233,8 +233,9 @@ test("handleMenuAction", async (t) => {
     window.requestQuit = () => calls.push("quit");
     window.stepZoom = (direction) => calls.push(`step-zoom:${direction}`);
     window.resetZoom = () => calls.push("reset-zoom");
+    window.openAbout = () => calls.push("about");
 
-    for (const id of ["new", "open", "save", "quit", "zoom-in", "zoom-out", "zoom-reset"]) {
+    for (const id of ["new", "open", "save", "quit", "zoom-in", "zoom-out", "zoom-reset", "about"]) {
       window.handleMenuAction(id);
     }
     assert.deepEqual(calls, [
@@ -245,6 +246,7 @@ test("handleMenuAction", async (t) => {
       "step-zoom:1",
       "step-zoom:-1",
       "reset-zoom",
+      "about",
     ]);
   });
 
@@ -260,6 +262,19 @@ test("handleMenuAction", async (t) => {
       called = true;
     };
     app.modalOpen = true;
+
+    window.handleMenuAction("new");
+
+    assert.equal(called, false);
+  });
+
+  await t.test("short-circuits every branch while the About dialog is open", () => {
+    const { window, app } = freshApp();
+    let called = false;
+    window.newWelcomeTab = () => {
+      called = true;
+    };
+    app.aboutOpen = true;
 
     window.handleMenuAction("new");
 

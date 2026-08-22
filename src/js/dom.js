@@ -26,4 +26,7 @@ const els = {
   modalSave: document.getElementById("modal-save"),
   modalDontSave: document.getElementById("modal-dont-save"),
   modalCancel: document.getElementById("modal-cancel"),
+  aboutBackdrop: document.getElementById("about-backdrop"),
+  aboutVersion: document.getElementById("about-version"),
+  aboutClose: document.getElementById("about-close"),
 };

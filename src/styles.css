@@ -711,3 +711,13 @@ body.is-splitting {
 }
 
 .modal-actions .open-btn { margin: 0; padding: 8px 16px; font-size: 13px; }
+
+/* Anchors are otherwise only styled under .content a — needed here for the
+   About dialog's GitHub/Patreon/monobank links. */
+.modal a { color: var(--accent); }
+
+.modal .hint { font-size: 13px; color: var(--text-muted); }
+
+/* #empty-state is a sibling of .content inside #content-wrap, not inside
+   it, so its new support link would otherwise render default-blue. */
+.empty-state a { color: var(--accent); }

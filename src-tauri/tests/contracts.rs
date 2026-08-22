@@ -53,6 +53,7 @@ fn menu_ids_match_the_frontend_switch() {
         ("ZOOM_IN", "zoom-in"),
         ("ZOOM_OUT", "zoom-out"),
         ("ZOOM_RESET", "zoom-reset"),
+        ("ABOUT", "about"),
     ] {
         let const_decl = format!("pub const {const_name}: &str = \"{id}\";");
         assert!(menu_rs.contains(&const_decl), "menu.rs is missing {const_decl:?}");

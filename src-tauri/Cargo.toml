@@ -2,7 +2,7 @@
 name = "mdreader"
 version = "0.1.0"
 description = "Lightweight cross-platform desktop Markdown viewer and editor"
-authors = ["Andrii Frantyk <ifrantya@gmail.com>"]
+authors = ["Andrii Frantyk"]
 license = "MIT"
 homepage = "https://github.com/A-Frantyk/mdreader"
 repository = "https://github.com/A-Frantyk/mdreader"
@@ -42,4 +42,3 @@ lto = true
 codegen-units = 1
 strip = true
 panic = "abort"
-

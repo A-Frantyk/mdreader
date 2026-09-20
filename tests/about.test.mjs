@@ -1,9 +1,5 @@
-// The About dialog: opening (version text), closing (Escape, backdrop
-// click, Close button), link routing to opener.openUrl (never openPath —
-// same rule link-routing.test.mjs enforces for rendered-document links),
-// and that it blocks the rest of the app's shortcuts while open, the same
-// way the unsaved-changes modal does (see tabs.test.mjs's handleMenuAction
-// suite for the menu-dispatch half of that guarantee).
+// The About dialog: opening, closing, link routing to opener.openUrl (never openPath),
+// and that it blocks the rest of the app's shortcuts while open, like the unsaved-changes modal.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { freshApp } from "./harness.mjs";
@@ -19,10 +15,7 @@ function key(window, props) {
   return event;
 }
 
-// The Close/backdrop/link listeners and the global keydown handler are
-// only attached inside wireStaticUI, which init() calls — and init()
-// itself never runs under the test harness (see harness.mjs's
-// TRAILING_INIT_CALL comment). wireStaticUI does nothing but register
+// init() never runs under the test harness — wireStaticUI does nothing but register
 // listeners (no IPC), so calling it directly here is safe.
 function freshWiredApp() {
   const app = freshApp();

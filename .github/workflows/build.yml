@@ -1,7 +1,6 @@
 name: Build
 
-# Produces per-platform installers as downloadable artifacts. Pushing a
-# `v*` tag additionally publishes them as a GitHub Release.
+# Pushing a `v*` tag additionally publishes installers as a GitHub Release.
 on:
   push:
     branches: [main, master]
@@ -9,11 +8,8 @@ on:
   pull_request:
   workflow_dispatch:
 
-# Least-privilege default for every job's GITHUB_TOKEN. Only the `release`
-# job needs more (its own block below). Third-party actions are pinned to
-# full commit SHAs (trailing comment = the tag/branch resolved from) so a
-# moved or compromised upstream ref can't change what runs here —
-# dependabot (.github/dependabot.yml) proposes the bumps.
+# Least-privilege default; `release` below needs more. Actions are pinned to full
+# commit SHAs (trailing comment = the resolved tag/branch) — dependabot proposes bumps.
 permissions:
   contents: read
 
@@ -71,17 +67,8 @@ jobs:
             args: '--target universal-apple-darwin'
           - platform: ubuntu-22.04
             name: linux
-            # deb/rpm only — no AppImage. Two reasons: (1) Tauri's
-            # AppImage bundler downloads five tools at bundle time
-            # (AppRun, linuxdeploy, two plugin scripts, an optional
-            # plugin AppImage) with zero retry logic, which flaked CI
-            # with a transient `io: Peer disconnected` — an unretried
-            # network fetch sitting directly in front of the release job
-            # (release: needs: build). (2) AppImage can't register the
-            # .md file association anyway (no .desktop-file install step
-            # the way deb/rpm packaging gets via update-desktop-database)
-            # — the app's whole premise on Linux. README already tells
-            # Linux users to install via deb/rpm for that reason.
+            # No AppImage: its bundler's unretried multi-tool download flaked CI with a
+            # transient error, and it can't register the .md file association anyway.
             args: '--bundles deb rpm'
           - platform: windows-latest
             name: windows
@@ -119,13 +106,8 @@ jobs:
       - name: Build
         run: npm run tauri build -- ${{ matrix.args }}
 
-      # Regression guard for the signingIdentity: "-" invariant
-      # (tauri.conf.json / CLAUDE.md): the universal `lipo` step is
-      # exactly what can leave the binary's ad-hoc signature broken,
-      # which macOS reports as "damaged" — not recoverable by any
-      # Gatekeeper override, unlike the expected unnotarized-app prompt.
-      # `--verify` must pass; `-dvvv`/`spctl` are logged only, since
-      # spctl rejecting an unnotarized app here is expected, not a bug.
+      # Regression guard for the signingIdentity invariant (CLAUDE.md) — --verify must
+      # pass; spctl rejecting an unnotarized app here is expected, logged only.
       - name: Verify macOS code signature
         if: matrix.platform == 'macos-latest'
         run: |
@@ -134,25 +116,11 @@ jobs:
           codesign -dvvv "$APP" || true
           spctl -a -t exec -vv "$APP" || true
 
-      # upload-artifact preserves directory structure starting at the
-      # first wildcard segment in `path`, so installers are staged flat
-      # here first rather than globbed straight from target/. Filtered to
-      # these five installer extensions specifically, not every file under
-      # bundle/ — the bundler leaves packaging scaffolding sitting next to
-      # the real installer in the same directory (deb/'s unpacked
-      # control/data/debian-binary/md5sums plus the raw executable, dmg/'s
-      # bundle_dmg.sh/template.applescript/icon.icns/eula-resources-template.xml),
-      # and an unfiltered `-path '*/bundle/*' -type f` swept all of that
-      # into a real release once already — see git blame. macOS's .app
-      # bundle needs no separate prune under this filter: nothing in that
-      # directory tree matches any of these five extensions.
-      #
-      # Plain `find`, not a bash globstar loop: macos-latest's default
-      # `bash` is the OS-shipped 3.2 (frozen there over GPLv3 licensing),
-      # and `globstar` needs bash 4+ — `shell: bash` steps run with `-e`,
-      # so `shopt -s globstar` failing would abort the step outright.
-      # `find`'s `-prune`/`-o`/`-exec` are POSIX and behave the same under
-      # GNU find (Linux, Windows via Git Bash) and BSD find (macOS).
+      # Staged flat, not globbed straight from target/, so upload-artifact's path
+      # structure stays sane. Filtered to these five extensions specifically — an
+      # unfiltered `-path '*/bundle/*' -type f` swept packaging scaffolding into a real
+      # release once already (see git blame). Plain `find`, not bash globstar: macOS's
+      # default bash 3.2 has no globstar, and `-e` would abort the step on that failing.
       - name: Stage installer(s) for upload
         shell: bash
         run: |
@@ -168,8 +136,7 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
-  # Separate from `build` because it needs all three platforms' artifacts
-  # downloaded together before it can publish.
+  # Separate from `build` — needs all three platforms' artifacts downloaded together.
   release:
     needs: build
     if: startsWith(github.ref, 'refs/tags/v')
@@ -179,8 +146,7 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      # Needed to pick up scripts/install-macos.sh below — this job
-      # otherwise only handles artifacts from the `build` job.
+      # Needed to pick up scripts/install-macos.sh below.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Download all platform installers
@@ -195,20 +161,16 @@ jobs:
           cp scripts/install-macos.sh release/
           ls -la release
 
-      # Public-repo only: GitHub's attestation API rejects private-repo
-      # requests. continue-on-error keeps that from blocking the Release
-      # publish below — drop it once the repo goes public.
+      # Public-repo only: GitHub's attestation API rejects private-repo requests.
+      # Drop continue-on-error once the repo goes public.
       - name: Attest build provenance
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         continue-on-error: true
         with:
           subject-path: 'release/*'
 
-      # A supplied body is prepended to the auto-generated changelog
-      # (generate_release_notes: true), not replaced by it — this is
-      # deliberately here rather than only in README.md, since the
-      # person hitting the Gatekeeper prompt is on this page, not in
-      # the repo's docs.
+      # Prepended to the auto-generated changelog, not replaced — kept here (not just
+      # README.md) since the person hitting the Gatekeeper prompt is on this page.
       - name: Publish release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:

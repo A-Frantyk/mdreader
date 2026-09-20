@@ -15,8 +15,7 @@
   --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
 }
 
-/* `data-theme` is always explicitly "light" or "dark" — no OS-follow
-   mode — so this is the only override needed alongside :root above. */
+/* data-theme is always explicitly "light" or "dark" — no OS-follow mode. */
 :root[data-theme="dark"] {
   --bg: #1b1e23;
   --bg-elevated: #22262c;
@@ -55,10 +54,8 @@ html, body {
   flex: 0 0 auto;
 }
 
-/* flex: 0 1 auto — hugs the tabs' own width (browser-tab-style, so "+"
-   sits right after the last tab) but still shrinks and scrolls
-   internally once tabs overflow, instead of pushing later controls
-   off-screen. */
+/* Hugs the tabs' own width, but shrinks and scrolls internally once they overflow,
+   instead of pushing later controls off-screen. */
 .tabbar {
   display: flex;
   align-items: stretch;
@@ -112,17 +109,13 @@ html, body {
   color: var(--accent);
 }
 
-/* display, not visibility — a reserved-but-invisible Save slot made Edit
-   look like it had drifted from its neighbors. Accepted trade-off: the
-   toolbar shifts a few px when Save appears/disappears. */
+/* display, not visibility — a reserved-but-invisible Save slot made Edit look
+   drifted from its neighbors. */
 .icon-btn.is-hidden {
   display: none;
 }
 
-/* Outside .tabbar's own overflow-x:auto region, so it can't scroll away
-   with an overflowing tab strip. align-self overrides .tabbar-row's
-   align-items:stretch, which would otherwise top-align this instead of
-   centering it like the buttons in .tabbar-controls. */
+/* Outside .tabbar's overflow-x:auto region, so it can't scroll away with the strip. */
 #new-tab-btn {
   flex: 0 0 auto;
   align-self: center;
@@ -229,18 +222,15 @@ html, body {
 .toc a.level-5,
 .toc a.level-6 { padding-left: 52px; }
 
-/* Does not itself scroll: each tab's .preview-scroll (and, in split
-   mode, .editor-pane) is its own independent scroll container, so the
-   two sides of a split can scroll separately. The TOC
-   IntersectionObserver root depends on scrolling happening per-tab. */
+/* Does not itself scroll — each tab's .preview-scroll/.editor-pane is its own
+   independent scroll container, so a split's two sides scroll separately. */
 .content-wrap {
   flex: 1 1 auto;
   position: relative;
   overflow: hidden;
 }
 
-/* Persistent for the tab's lifetime — recreating this per activation
-   would break the "mermaid/KaTeX render once" invariant. */
+/* Persistent for the tab's lifetime — see CLAUDE.md's render-once invariant. */
 .tab-pane {
   display: none;
   height: 100%;
@@ -250,20 +240,15 @@ html, body {
   display: flex;
 }
 
-/* Created lazily on first entry into split mode, never destroyed after
-   — toggling back to view-only and back to split again is free. */
+/* Created lazily on first entry into split mode, never destroyed after. */
 .editor-pane,
 .pane-splitter {
   display: none;
 }
 
 .tab-pane.split .editor-pane {
-  /* Flex column: .editor-toolbar is a fixed-height row above CodeMirror's
-     wrapper, both children of .editor-pane in that DOM order (app.js's
-     createEditorToolbar depends on this order). flex-basis is
-     --split-ratio, set by attachSplitterDrag in app.js — grow:0 so this
-     side never grows past the ratio JS set (see .preview-scroll below
-     for the other half of this pairing). */
+  /* flex-basis is --split-ratio, set by attachSplitterDrag — grow:0 so this side
+     never grows past the ratio JS set (see .preview-scroll below). */
   display: flex;
   flex-direction: column;
   flex: 0 1 var(--split-ratio, 50%);
@@ -273,10 +258,8 @@ html, body {
   border-right: 1px solid var(--border);
 }
 
-/* Paired with .editor-pane's flex-basis above: the editor takes the
-   explicit --split-ratio basis, the preview takes whatever's left via a
-   zero basis + grow:1. Sizing only one side is what keeps the two from
-   disagreeing about the total once the 6px splitter is subtracted. */
+/* Paired with .editor-pane's flex-basis above — sizing only one side keeps the two
+   from disagreeing about the total once the 6px splitter is subtracted. */
 .tab-pane.split .preview-scroll {
   flex: 1 1 0;
 }
@@ -290,9 +273,7 @@ html, body {
   touch-action: none; /* a pointer drag here is a resize, not a scroll gesture */
 }
 
-/* Widens the *interactive* area to ~16px while leaving the visible seam
-   at 6px — a wider visible strip would read as a UI element rather than
-   a seam between panes. */
+/* Widens the interactive area to ~16px while leaving the visible seam at 6px. */
 .tab-pane.split .pane-splitter::before {
   content: "";
   position: absolute;
@@ -307,9 +288,8 @@ html, body {
   background: var(--accent);
 }
 
-/* Set on <body> by attachSplitterDrag only for the drag's duration, so
-   dragging fast past the divider doesn't flicker the cursor back to a
-   text I-beam, and text elsewhere doesn't get selected mid-drag. */
+/* Set on <body> only for the drag's duration, so a fast drag doesn't flicker the
+   cursor back to a text I-beam. */
 body.is-splitting {
   cursor: col-resize;
   user-select: none;
@@ -324,9 +304,7 @@ body.is-splitting {
   flex: 0 0 auto;
   background: var(--editor-chrome);
   border-bottom: 1px solid var(--border);
-  /* 14 buttons don't fit once the editor pane is halved by the split —
-     scroll horizontally rather than wrap (unpredictable vertical space)
-     or shrink buttons illegibly. */
+  /* 14 buttons don't fit once the editor pane is halved — scroll, don't wrap or shrink. */
   overflow-x: auto;
   flex-wrap: nowrap;
 }
@@ -339,9 +317,8 @@ body.is-splitting {
   flex: 0 0 auto;
 }
 
-/* min-height: 0 lets CodeMirror's own internal scroller handle overflow
-   instead of this item growing past its container (same flex-overflow
-   trap .body guards against above). */
+/* min-height: 0 lets CodeMirror's own internal scroller handle overflow instead of
+   this item growing past its container. */
 .editor-pane .CodeMirror {
   flex: 1 1 auto;
   min-height: 0;
@@ -394,9 +371,8 @@ body.is-splitting {
   font-family: inherit;
   color: #fff;
   background: var(--accent);
-  /* Transparent, not none: reserves the same 1px .open-btn.secondary
-     spends on a real border, so primary/secondary pairs stay equal
-     height (Open File… vs Create, Save vs Don't Save/Cancel). */
+  /* Transparent, not none — reserves the same 1px .open-btn.secondary spends on a
+     real border, so primary/secondary pairs stay equal height. */
   border: 1px solid transparent;
   border-radius: 8px;
   cursor: pointer;
@@ -414,9 +390,8 @@ body.is-splitting {
 .open-btn.secondary:hover { filter: none; background: var(--accent-weak); }
 .open-btn.secondary:active { filter: none; background: var(--border); }
 
-/* Scoped to .empty-actions, not .open-btn.secondary generally, so it
-   doesn't also recolor the modal's Don't Save/Cancel — those share the
-   same base classes but shouldn't visually claim equal weight with Save. */
+/* Scoped to .empty-actions, not .open-btn.secondary generally — must not also
+   recolor the modal's Don't Save/Cancel. */
 .empty-actions .open-btn.secondary {
   border-color: var(--accent);
 }
@@ -430,11 +405,9 @@ body.is-splitting {
   line-height: 1.65;
 }
 
-/* A welcome tab's contentEl holds a cloned .empty-state (buildWelcomePane
-   in app.js), whose height:100% needs a definite-height ancestor to
-   center against — .content's default height is auto, so without this
-   the welcome screen renders top-aligned instead of centered. Removed by
-   convertWelcomeTab before real rendered HTML ever lands here. */
+/* A welcome tab's contentEl holds a cloned .empty-state, whose height:100% needs a
+   definite-height ancestor — .content's default is auto, so without this the welcome
+   screen renders top-aligned. Removed by convertWelcomeTab before real HTML lands here. */
 .content.welcome {
   height: 100%;
   max-width: none;
@@ -477,10 +450,7 @@ body.is-splitting {
 
 .content a { color: var(--accent); }
 
-/* A resolved local link (render.rs's data-path, not href — see CLAUDE.md's
-   path-resolution invariant) carries no href, so it gets no pointer cursor
-   for free the way a normal <a href> does. role="link" tabindex="0"
-   (also render.rs) restores keyboard focus; this restores the cursor. */
+/* data-path, not href (see CLAUDE.md) — no href means no pointer cursor for free. */
 .content a[data-path] { cursor: pointer; }
 
 .content img, .content svg { max-width: 100%; }
@@ -500,10 +470,7 @@ body.is-splitting {
   border-radius: 4px;
 }
 
-/* --syntax-bg (build.rs's syntax_root_css, in the eagerly-linked
-   code-theme-*.css) falls back to --code-bg for a session that somehow
-   loads before it — same fence background the editor pane uses, so a
-   fence looks identical in both panes. */
+/* --syntax-bg falls back to --code-bg — see CLAUDE.md's theme-sourcing invariant. */
 .content pre.code-block {
   background: var(--syntax-bg, var(--code-bg));
   border: 1px solid var(--border);
@@ -605,33 +572,13 @@ body.is-splitting {
   min-width: 3.5em;
 }
 
-/* Two CodeMirror theme layers applied simultaneously (enterSplitMode's
-   `theme: "mdreader mdreader-syntax"` in edit-mode.js), disjoint by
-   *namespace* rather than by hand-picked class: edit-mode.js's
-   tokenTypeOverrides renames every Markdown token to `cm-md-*` (owned
-   here), leaving the full plain CodeMirror vocabulary — `cm-comment`,
-   `cm-tag`, `cm-variable-2`, etc. — free for `cm-s-mdreader-syntax`
-   (generate_codemirror_theme_css in build.rs) to own without collision.
-   Colors come from the `--syntax-*` custom properties build.rs's
-   syntax_root_css emits into code-theme-{light,dark}.css (linked eagerly
-   in index.html, so they exist even in a session that never opens the
-   editor) — each with an `--editor-*`/`--text-*` fallback for defense in
-   depth, not because either is expected to be missing.
-
-   Four token classes markdown.js/gfm.js hardcode outside
-   tokenTypeOverrides' reach — `meta`/`property` (task checkboxes) and
-   `url`/`link` (autolinks, image alt text) — are handled below the
-   cm-md-* block, not renamed. */
+/* Two CodeMirror theme layers, disjoint by namespace not hand-picked class — see
+   CLAUDE.md's two-theme-layer invariant. Colors come from --syntax-* (build.rs's
+   syntax_root_css), each with an --editor-*/--text-* fallback for defense in depth. */
 .cm-s-mdreader.CodeMirror {
   background-color: var(--syntax-bg, var(--editor-bg));
-  /* Stationary, not scrolling with the text: .CodeMirror-scroll is
-     transparent and sits above this wrapper, so the grid can't shimmer or
-     force a repaint while typing. Putting it on .CodeMirror-lines instead
-     would scroll with the text but stop at the last line, leaving a visible
-     cutoff on short documents. Size is decorative, deliberately not locked
-     to the computed line-box height (13.5px * 1.55 below) — a stationary
-     grid drifts out of phase with the text regardless, so matching it would
-     only look like a near-miss. */
+  /* Stationary, not scrolling with the text — .CodeMirror-scroll sits above this
+     wrapper, so the grid can't shimmer while typing. */
   background-image: radial-gradient(var(--editor-grid) 1px, transparent 1px);
   background-size: 22px 22px;
   color: var(--syntax-fg, var(--text));
@@ -656,13 +603,9 @@ body.is-splitting {
   background: var(--syntax-selection, var(--accent-weak));
 }
 
-/* Flat, source-first: no bold/italic/underline anywhere, so the source
-   never re-renders like its own preview. cm-md-punct (a syntax marker —
-   #, **, >, `, [](), list bullets) is listed LAST and carries the exact
-   same specificity as every rule above it, because highlightFormatting
-   makes a marker carry BOTH classes (e.g. "cm-md-header cm-md-punct
-   cm-md-punct-header-1") — source order is what makes the dim marker
-   color win over the content color. Don't reorder this block. */
+/* Flat, source-first — no bold/italic/underline anywhere. cm-md-punct is listed LAST
+   at equal specificity to every rule above it — source order is what makes the dim
+   marker color win over the content color on a dual-class token. Don't reorder. */
 .cm-s-mdreader .cm-md-header { color: var(--syntax-md-header, var(--accent)); font-weight: normal; }
 .cm-s-mdreader .cm-md-strong { color: var(--syntax-md-strong, var(--syntax-fg, var(--text))); font-weight: inherit; }
 .cm-s-mdreader .cm-md-em { color: var(--syntax-md-em, var(--syntax-fg, var(--text))); font-style: normal; }
@@ -674,10 +617,8 @@ body.is-splitting {
 .cm-s-mdreader .cm-md-list,
 .cm-s-mdreader .cm-md-hr,
 .cm-s-mdreader .cm-md-image-marker { color: var(--syntax-md-list, var(--text-muted)); }
-/* cm-md-image (bare "image" tokenType) is deliberately unstyled: markdown.js
-   sets it on both the marker (alongside cm-md-image-marker) and the alt
-   text (alongside cm-md-image-alt), so it never needs its own color — the
-   co-occurring, later-declared rule always supplies one. */
+/* cm-md-image is deliberately unstyled — always co-occurs with cm-md-image-marker
+   or cm-md-image-alt, which already supply a color. */
 .cm-s-mdreader .cm-md-code {
   color: var(--syntax-md-code, var(--text));
   background: var(--syntax-line-highlight, var(--code-bg));
@@ -685,21 +626,14 @@ body.is-splitting {
 }
 .cm-s-mdreader .cm-md-punct { color: var(--syntax-punct, var(--text-muted)); }
 
-/* gfm.js's bare autolinks (a whole token, un-namespaced "cm-link" with no
-   companion class) and markdown.js's imageAltText, which pushes a bare
-   "link" class alongside cm-md-image-alt — both hardcoded outside
-   tokenTypeOverrides' reach. cm-url is deliberately left unstyled here:
-   markdown.js only ever emits it paired with cm-md-href on the exact same
-   token, and cm-md-href (above) already owns that token's color — an
-   .cm-url rule at equal specificity would just be a same-cascade-position
-   fight over which value wins. */
+/* gfm.js's bare autolinks and markdown.js's imageAltText, both hardcoded outside
+   tokenTypeOverrides' reach. cm-url is left unstyled — always paired with cm-md-href,
+   which already owns that token's color. */
 .cm-s-mdreader .cm-link { color: var(--syntax-md-link, var(--accent)); text-decoration: none; }
 
-/* Task checkboxes (markdown.js hardcodes "meta"/"property", also outside
-   tokenTypeOverrides). 0,3,0 beats the generated theme's 0,2,0
-   cm-meta/cm-property: codemirror-theme-*.css is appended to <head> at
-   runtime by loaders.js's ensureCodeMirror, i.e. AFTER this stylesheet,
-   so on equal specificity IT would win every tie without this bump. */
+/* Task checkboxes (markdown.js hardcodes meta/property). 0,3,0 beats the generated
+   theme's 0,2,0 — that stylesheet loads lazily, AFTER this one, so it would win every
+   tie on equal specificity without this bump. */
 .cm-s-mdreader.CodeMirror .cm-meta,
 .cm-s-mdreader.CodeMirror .cm-property { color: var(--syntax-md-list, var(--accent)); }
 
@@ -756,8 +690,7 @@ body.is-splitting {
 
 .modal-actions .open-btn { margin: 0; padding: 8px 16px; font-size: 13px; }
 
-/* Anchors are otherwise only styled under .content a — needed here for the
-   About dialog's GitHub/PayPal/monobank links. */
+/* Anchors are otherwise only styled under .content a — needed for the About dialog's links. */
 .modal a { color: var(--accent); }
 
 .modal .hint { font-size: 13px; color: var(--text-muted); }

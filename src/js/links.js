@@ -1,33 +1,17 @@
 // Routing clicks/keydowns on rendered content: local images, local links, and external URLs.
 
-// render.rs already resolved every local image destination to an absolute
-// filesystem path and put it in data-path, never src — see the
-// path-resolution invariant in CLAUDE.md for why (ammonia applies URL rules
-// to src=, and a Windows path like C:\... parses as URL scheme "c" and gets
-// silently dropped). A remote or data-URI <img> never gets a data-path, so
-// this is a pure attribute-presence check, not path arithmetic.
+// data-path, not src — see CLAUDE.md's path-resolution invariant. A remote/data-URI
+// <img> never gets one, so this is a pure attribute-presence check.
 function rewriteImageSources(root) {
   root.querySelectorAll("img[data-path]").forEach((img) => {
     img.src = tauri.core.convertFileSrc(img.dataset.path);
   });
 }
 
-// ---------------------------------------------------------------------
-// Handing a non-markdown link to the OS (`opener.openPath`) is the one
-// place this app turns untrusted document content into "run something
-// outside the webview". By the time a link reaches the click handler,
-// render.rs has already resolved it to an absolute filesystem path (see
-// the path-resolution invariant in CLAUDE.md), so a document shipped
-// alongside `install.command` / `Setup.exe` / `x.desktop` could name it
-// with any link text it likes. Two layers, deliberately both:
-//   1. a denylist of extensions the OS would *execute* rather than
-//      *display* — refused outright, with a message;
-//   2. a native yes/no dialog showing the resolved absolute path (not the
-//      link text) for everything else, so a click is never silent.
-// The denylist is a convenience, not the guarantee — the confirmation is.
-// Never call `tauri.opener.openPath` anywhere except through
-// openWithSystem.
-// ---------------------------------------------------------------------
+// The one place untrusted document content can run something outside the webview.
+// Two layers: a denylist of executable extensions (convenience), and a confirm dialog
+// showing the resolved absolute path (the guarantee). Never call opener.openPath
+// anywhere except through this function.
 const BLOCKED_OPEN_EXTENSIONS = new Set([
   // macOS
   "app", "command", "terminal", "workflow", "scpt", "action", "pkg", "dmg",
@@ -55,12 +39,8 @@ async function openWithSystem(href) {
   await tauri.opener.openPath(href).catch((err) => console.error("failed to open path", err));
 }
 
-// A resolved local link carries data-path, not href (see rewriteImageSources'
-// comment above), but everything downstream of "we have a local filesystem
-// path" is one decision regardless of which attribute it came from — this is
-// also the click handler's own href fallback for a raw <a href> the document
-// wrote itself in literal HTML (never touched by render.rs's resolution,
-// since it isn't markdown link syntax).
+// Also the fallback for a raw <a href> the document wrote in literal HTML — never
+// touched by render.rs's resolution, since it isn't markdown link syntax.
 function activateLocalPath(path) {
   if (markdownExtensions.has(extOf(path))) {
     openPaths([path]);
@@ -69,11 +49,9 @@ function activateLocalPath(path) {
   }
 }
 
-// Delegated once on the shared container rather than per-link per-render:
-// tabs' content persists, so this fires for every tab without rebinding.
-// In-page `#anchor` clicks are handled here too (not left to the browser)
-// because every open tab's headings live in the same document at once —
-// default fragment navigation can't tell which tab's heading you meant.
+// Delegated once: tabs' content persists, so this fires for every tab without rebinding.
+// #anchor clicks are handled here, not left to the browser — default fragment
+// navigation can't tell which open tab's heading you meant.
 els.contentWrap.addEventListener("click", (e) => {
   const a = e.target.closest("a[href], a[data-path]");
   if (!a) return;
@@ -102,9 +80,7 @@ els.contentWrap.addEventListener("click", (e) => {
   activateLocalPath(href);
 });
 
-// role="link" tabindex="0" (render.rs) makes a data-path <a> focusable, same
-// as a real href would — but an <a> with no href fires no native "click"
-// activation on Enter/Space, so that has to be replicated here explicitly.
+// An <a> with no href fires no native "click" on Enter/Space, so replicate it here.
 els.contentWrap.addEventListener("keydown", (e) => {
   if (e.key !== "Enter" && e.key !== " ") return;
   const a = e.target.closest("a[data-path]");

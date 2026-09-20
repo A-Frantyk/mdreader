@@ -1,8 +1,7 @@
 // Tab lifecycle: opening, closing, activating, and the tab bar.
 
-/// Load `path` into a new tab. Its pane is created but not shown —
-/// `activateTab` toggles visibility and does the (lazy, one-time)
-/// mermaid/KaTeX render once the element actually has layout.
+// Pane is created but not shown — activateTab toggles visibility and does the
+// lazy, one-time mermaid/KaTeX render once the element has real layout.
 async function loadTab(path) {
   const tab = createTabShell({ path, title: basename(path) });
   const { contentEl } = tab;
@@ -26,10 +25,8 @@ async function loadTab(path) {
   state.tabs.push(tab);
 }
 
-/// Untitled document titles: "Untitled", then "Untitled 2", "Untitled 3", …
-/// — scans current tab titles rather than keeping a running counter, so a
-/// closed "Untitled 2" frees that number back up for the next Create,
-/// matching how most editors number untitled documents.
+// Scans current titles rather than a running counter, so a closed "Untitled 2"
+// frees that number back up for the next Create.
 function untitledTitle() {
   const taken = new Set(state.tabs.map((t) => t.title));
   if (!taken.has("Untitled")) return "Untitled";
@@ -40,18 +37,10 @@ function untitledTitle() {
 
 let newDocInFlight = false;
 
-/// Creates a brand-new, empty, never-saved document and drops it straight
-/// into edit mode — the "Create" action. No template text: a document
-/// nobody typed anything into is what makes the "closes with no unsaved-
-/// changes prompt" rule (see confirmClosable) apply for free, since
-/// `source: ""` / `savedSource: ""` means markDirty never flips to dirty
-/// until the user actually types something.
-///
-/// Must activate the tab *before* entering split mode: enterSplitMode
-/// constructs CodeMirror against the pane's real layout, which only
-/// exists once activateTab has added the "visible" class — the same
-/// ordering enterSplitMode's own comment documents for every other path
-/// into edit mode.
+// No template text: source === savedSource === "" is what keeps markDirty from
+// flipping until the user actually types something (see confirmClosable).
+// Must activate before entering split mode — enterSplitMode needs the pane's
+// real layout, which only exists once activateTab adds the "visible" class.
 async function newDocument() {
   if (newDocInFlight) return;
   newDocInFlight = true;
@@ -68,10 +57,8 @@ async function newDocument() {
   }
 }
 
-/// Clones the shared welcome-pane template (index.html's
-/// #welcome-pane-template) into `tab`'s contentEl — data-action
-/// attributes instead of ids, since several welcome tabs can be open at
-/// once and ids can't repeat in a cloned template.
+// data-action attributes, not ids — several welcome tabs can be open at once
+// and ids can't repeat in a cloned template.
 function buildWelcomePane(tab) {
   tab.contentEl.classList.add("welcome");
   tab.contentEl.replaceChildren(els.welcomeTemplate.content.cloneNode(true));
@@ -83,14 +70,9 @@ function buildWelcomePane(tab) {
     .addEventListener("click", () => convertWelcomeTab(tab));
 }
 
-/// Turns a welcome tab into an ordinary Untitled document, in place — no
-/// second tab appears, matching a browser's New Tab page navigating to
-/// content rather than spawning another tab. Removing the "welcome" class
-/// is load-bearing, not tidiness: it's what gives .content its normal
-/// prose padding/reading-column width back before enterSplitMode's
-/// preview ever writes real rendered HTML into this same contentEl (see
-/// the .content.welcome rule in styles.css) — left in place it would
-/// silently break that document's layout.
+// In place, no second tab — matching a browser's New Tab page navigating to content.
+// Removing the "welcome" class is load-bearing: it restores .content's normal prose
+// width before real rendered HTML lands in this same contentEl.
 async function convertWelcomeTab(tab) {
   tab.kind = "document";
   tab.title = untitledTitle();
@@ -107,8 +89,7 @@ async function convertWelcomeTab(tab) {
   }
 }
 
-/// Several welcome tabs can coexist — they all carry `path: null` and
-/// never collide with openPaths' path-based dedupe.
+// Several welcome tabs can coexist — path: null never collides with openPaths' dedupe.
 async function newWelcomeTab() {
   try {
     const tab = createTabShell({ kind: "welcome", title: "New Tab" });
@@ -120,9 +101,7 @@ async function newWelcomeTab() {
   }
 }
 
-/// Single entry point for every way a document can be opened. Dedupes
-/// against both open tabs and in-flight loads, then activates once at
-/// the end.
+// Single entry point for every way a document can be opened.
 async function openPaths(paths) {
   let lastTouched = -1;
   for (const path of paths) {
@@ -148,11 +127,8 @@ async function drainAndOpen() {
   if (pending.length) await openPaths(pending);
 }
 
-/// Shared "is it OK to make this tab go away" check, used by both
-/// closeTab and requestQuit. A dirty tab is switched to first (so the
-/// user sees what they're deciding about), then run through the
-/// three-way modal — "save" defers to saveTab's own success/failure, so
-/// a failed or cancelled save aborts the close too, same as "cancel".
+// Shared by closeTab and requestQuit. "save" defers to saveTab's own success/failure,
+// so a failed or cancelled save aborts the close too, same as "cancel".
 async function confirmClosable(tab) {
   if (!tab.dirty) return true;
   if (tab.closeConfirmPending) return false;
@@ -175,11 +151,8 @@ async function closeTab(index) {
 
   if (!(await confirmClosable(tab))) return;
 
-  // renderTabBar's per-tab click handlers (which capture a tab's position
-  // by closure, not identity) could have closed a different tab while the
-  // above was awaiting, shifting every index after it — or the user could
-  // have triggered a second close of this same tab. Re-resolve by
-  // identity rather than trusting the stale `index`.
+  // Another tab could have closed (or this one closed twice) while the above awaited,
+  // shifting indices — re-resolve by identity rather than trusting the stale `index`.
   index = state.tabs.indexOf(tab);
   if (index === -1) return;
 

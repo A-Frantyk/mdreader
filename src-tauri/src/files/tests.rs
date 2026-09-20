@@ -7,9 +7,7 @@ use crate::MARKDOWN_EXTENSIONS;
 fn test_state() -> AppState {
     AppState {
         pending: Mutex::new(Vec::new()),
-        // Derived from the real constant, not hand-duplicated — a
-        // hardcoded list here could silently drift from
-        // tauri.conf.json's fileAssociations without any test noticing.
+        // Derived from the real constant so this can't silently drift from tauri.conf.json.
         markdown_extensions: MARKDOWN_EXTENSIONS.iter().map(|s| s.to_string()).collect(),
         frontend_ready: AtomicBool::new(false),
     }
@@ -93,11 +91,6 @@ fn normalize_markdown_path_preserves_the_parent_directory() {
 
 #[test]
 fn normalize_markdown_path_leaves_a_path_with_no_file_name_alone() {
-    // `Path::file_name()` is `None` for "/" and "..". Previously this
-    // fell through to `unwrap_or_default()`, turning "/" into
-    // "/.markdown" and ".." into a bare ".markdown" in the parent —
-    // synthesizing a file name out of nothing rather than leaving an
-    // un-normalizable path as-is.
     let state = test_state();
     assert_eq!(normalize_markdown_path(&state, Path::new("/")), PathBuf::from("/"));
     assert_eq!(normalize_markdown_path(&state, Path::new("..")), PathBuf::from(".."));
@@ -156,10 +149,7 @@ fn atomic_write_to_a_nonexistent_directory_fails_without_touching_target() {
 
 #[test]
 fn atomic_write_cleans_up_its_temp_file_when_the_rename_fails() {
-    // Target is an existing directory, not a file — `fs::rename`
-    // refuses to replace a directory with a file, so this forces the
-    // one branch (the temp-file cleanup on rename failure) none of
-    // the other atomic_write tests exercise.
+    // Target is a directory: fs::rename refuses to replace it, forcing the cleanup branch.
     let dir = test_dir("rename-fails");
     let target = dir.join("doc.md");
     std::fs::create_dir(&target).unwrap();
@@ -213,9 +203,7 @@ fn atomic_write_replaces_a_symlink_target_not_its_destination() {
 
     atomic_write(&link, "new contents").unwrap();
 
-    // The link itself now points at (or contains) the new contents,
-    // but the file it used to point to is untouched — rename() swaps
-    // the directory entry, it doesn't write through a symlink.
+    // rename() swaps the directory entry; it doesn't write through the symlink.
     assert_eq!(std::fs::read_to_string(&link).unwrap(), "new contents");
     assert_eq!(std::fs::read_to_string(&real_dest).unwrap(), "original destination contents");
     assert!(!link.is_symlink(), "rename over a symlink should replace the link itself");

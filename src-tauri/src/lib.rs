@@ -10,26 +10,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
 
-// Generates `pub const MARKDOWN_EXTENSIONS: &[&str]` from `tauri.conf.json`'s
-// bundle.fileAssociations at *build* time — see build.rs's
-// `generate_markdown_extensions` doc comment for why this can't be read
-// back from `Context::config()` at runtime.
+// Generated from tauri.conf.json's bundle.fileAssociations at build time — see build.rs.
 include!(concat!(env!("OUT_DIR"), "/markdown_extensions.rs"));
 
-/// Every entry point funnels through `queue`, which always pushes here
-/// first. The `main` window is created before `.setup()` runs (Tauri
-/// builds config windows, then calls the setup hook), so at cold start
-/// `get_webview_window("main")` is already `Some` even though the page
-/// hasn't loaded and has no listener attached yet — emitting straight to
-/// it would silently lose the event. Queuing unconditionally and treating
-/// the emitted event as a hint (not the payload) means the frontend can
-/// always recover by draining on load, regardless of timing.
-///
-/// `frontend_ready` guards the same race for the close handshake (see
-/// `on_window_event` in `run`): a `CloseRequested` firing before `app.js`
-/// registers its `close-requested` listener would have its
-/// `prevent_close()` + emit silently dropped. The frontend flips this via
-/// `mark_frontend_ready` only once that listener exists.
+/// Queue-always pattern for both the file-open race and the close handshake — see CLAUDE.md.
 pub(crate) struct AppState {
     pub(crate) pending: Mutex<Vec<PathBuf>>,
     pub(crate) markdown_extensions: HashSet<String>,
@@ -68,24 +52,12 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init());
 
-    // `Builder::menu` (not `App::set_menu` in `.setup()`), so
-    // `Builder::build`'s "only install the macOS default when no menu was
-    // set" check suppresses that default outright instead of
-    // installing-then-replacing it. See menu.rs's module doc for why the
-    // default itself can't be reused.
+    // Builder::menu, not App::set_menu in .setup() — suppresses Builder::build's macOS default
+    // menu outright rather than installing then replacing it.
     #[cfg(desktop)]
     let builder = builder.menu(menu::build).on_menu_event(menu::handle);
 
-    // Entry path 3 (app already running, forward the new process's argv,
-    // then let it exit) is Windows/Linux-only. On macOS this plugin
-    // forwards `std::env::args()` — but macOS never puts an "Open With"
-    // file in argv; it delivers it via `application:openURLs:` (see the
-    // RunEvent::Opened handler below), which fires on whichever process
-    // LaunchServices routes to — including an already-running one, with
-    // no separate process ever spawned. Registering this plugin on macOS
-    // meant a repeat "Open With" would connect to the running instance,
-    // forward an *empty* argv, and exit — silently dropping the file.
-    // Confirmed against tauri-plugin-single-instance's macOS impl.
+    // macOS-excluded — see CLAUDE.md's single-instance-plugin invariant.
     #[cfg(not(target_os = "macos"))]
     let builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
         queue_markdown_args(app, argv.into_iter().skip(1).map(PathBuf::from));
@@ -93,26 +65,20 @@ pub fn run() {
 
     builder
         .setup(|app| {
-            // Prewarm syntect's syntax set (~360 KB deserialization) so a
-            // document with code fences doesn't block on the first render.
+            // Prewarm syntect's syntax set (~360 KB deserialization) off the render hot path.
             std::thread::spawn(|| std::sync::LazyLock::force(&render::SYNTAX_SET));
-
-            // `args_os` (not `args`) so a non-UTF-8 filename can't panic
-            // the app before it paints.
+            // args_os, not args: a non-UTF-8 filename must not panic before the app paints.
             queue_markdown_args(app.handle(), std::env::args_os().skip(1).map(PathBuf::from));
             Ok(())
         })
-        // `prevent_close()` is called synchronously, in the same handler
-        // invocation that receives the event — the runtime checks whether
-        // it was called immediately after running listeners, so any
-        // `await` before it would let the window close anyway.
+        // prevent_close() must run synchronously here — see CLAUDE.md's close-handshake invariant.
         .on_window_event(|window, event| {
             if window.label() != "main" {
                 return;
             }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if !window.state::<AppState>().frontend_ready.load(Ordering::Relaxed) {
-                    return; // no listener could exist yet — let it close normally
+                    return;
                 }
                 api.prevent_close();
                 let _ = window.emit("close-requested", ());
@@ -133,11 +99,8 @@ pub fn run() {
         .build(context)
         .expect("error while building tauri application")
         .run(|_app_handle, _event| {
-            // RunEvent::Opened only exists on macOS/iOS/Android
-            // (tauri-2.11.5/src/app.rs:257-263) — matching on it
-            // unconditionally is a compile error on Windows/Linux, not
-            // just a no-op, so this has to be cfg-gated to the one
-            // platform that's both in scope and needs it.
+            // RunEvent::Opened is macOS/iOS/Android-only (tauri-2.11.5/src/app.rs:257-263) —
+            // matching it unconditionally is a compile error, not a no-op, on Windows/Linux.
             #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Opened { urls } = _event {
                 let paths = urls.into_iter().filter_map(|url| {

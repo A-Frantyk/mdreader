@@ -2,9 +2,8 @@
 
 const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
 
-// On first launch the OS's current theme preference is read once and
-// persisted as an explicit choice; the app never re-consults the OS
-// after that, so a later OS theme flip doesn't silently relabel anything.
+// The OS preference is read once on first launch and persisted; a later OS flip
+// never silently relabels the app's own choice.
 const THEME_KEY = "mdreader.theme";
 const THEME_ICON = { light: "☀", dark: "☾" };
 
@@ -25,9 +24,7 @@ async function applyTheme() {
   const pref = themePreference();
   document.documentElement.dataset.theme = pref;
   setCodeThemeLink(pref);
-  // Only exists once edit mode has been entered at least once (see
-  // ensureCodeMirror) — a session that never opens the editor never
-  // creates this link, so there's nothing to flip.
+  // Only exists once edit mode has been entered at least once — see ensureCodeMirror.
   if (cmSyntaxThemeLink) {
     cmSyntaxThemeLink.href = pref === "dark" ? "codemirror-theme-dark.css" : "codemirror-theme-light.css";
   }

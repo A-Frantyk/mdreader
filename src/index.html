@@ -4,8 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>mdreader</title>
-    <!-- href swapped between code-theme-light.css / code-theme-dark.css by
-         js/theme.js's setCodeThemeLink, per the resolved theme. -->
+    <!-- href swapped between code-theme-{light,dark}.css by theme.js per the resolved theme. -->
     <link rel="stylesheet" href="code-theme-light.css" id="code-theme" />
     <link rel="stylesheet" href="styles.css" />
   </head>
@@ -54,13 +53,8 @@
 
       <div class="drop-overlay" id="drop-overlay">Drop to open</div>
 
-      <!-- Cloned into a welcome tab's contentEl by buildWelcomePane in
-           js/tabs.js — same screen as #empty-state above, but with
-           data-action attributes instead of ids: a cloned <template>
-           can't reuse ids (several welcome tabs can be open at once). Keep
-           this in sync with #empty-state by hand if that one ever changes;
-           kept as a separate declaration rather than sharing one node
-           since #empty-state is a singleton and this isn't. -->
+      <!-- Same screen as #empty-state, but data-action attributes instead of ids —
+           a cloned <template> can't reuse ids. Keep in sync with #empty-state by hand. -->
       <template id="welcome-pane-template">
         <div class="empty-state">
           <p>No document open.</p>
@@ -88,10 +82,7 @@
         </div>
       </div>
 
-      <!-- About dialog — see src-tauri/src/menu.rs's ABOUT id and the
-           "menu-action" listener in js/main.js. Custom rather than
-           PredefinedMenuItem::about because NSAboutPanel (macOS's native
-           About box) can't host a clickable link. -->
+      <!-- Custom, not PredefinedMenuItem::about — NSAboutPanel can't host a clickable link. -->
       <div class="modal-backdrop" id="about-backdrop">
         <div class="modal" role="dialog" aria-modal="true" aria-labelledby="about-title">
           <p class="modal-message" id="about-title">mdreader</p>
@@ -110,13 +101,8 @@
       </div>
     </div>
 
-    <!-- Classic scripts sharing one global lexical scope, deliberately not
-         ES modules — see CLAUDE.md's "the frontend is N classic scripts"
-         invariant. Load order matters only for the handful of things that
-         run at load time rather than inside a later function call:
-         js/dom.js's `els` must precede js/toc.js and js/links.js (both
-         register listeners on `els.*` at load), and js/main.js must be
-         last (it ends with a bare `init();`). -->
+    <!-- Classic scripts, one global scope, not ES modules — see CLAUDE.md's
+         classic-scripts invariant for load-order constraints. -->
     <script src="js/tauri.js"></script>
     <script src="js/helpers.js"></script>
     <script src="js/dom.js"></script>

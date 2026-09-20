@@ -1,19 +1,13 @@
-// The formatting-toolbar / keyboard-shortcut text transforms — the most
-// logic-dense functions in app.js, and (before this suite) completely
-// unexercised by anything. Each takes a `cm` parameter and touches no DOM
-// or Tauri IPC, so `fakeCm` (a real line-buffer implementing the handful
-// of CodeMirror 5 methods these functions call) is enough on its own.
+// The formatting-toolbar / keyboard-shortcut text transforms. Each takes a `cm`
+// parameter and touches no DOM or Tauri IPC, so fakeCm is enough on its own.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { freshApp, fakeCm } from "./harness.mjs";
 
 test("posAfterText", async (t) => {
   const { window } = freshApp();
-  // posAfterText's return value is a plain object created inside jsdom's
-  // vm context, so it carries that realm's Object.prototype — deepStrictEqual
-  // treats it as unequal to a same-shaped literal from this (Node) realm
-  // even when every property matches. structuredClone re-materializes it
-  // here, in the calling realm, before comparing.
+  // Cross-realm object from jsdom's vm context — deepStrictEqual would treat it as
+  // unequal to a same-shaped literal here; structuredClone re-materializes it first.
   const posOf = (...args) => structuredClone(window.posAfterText(...args));
 
   await t.test("single-line insert advances ch by the text length", () => {
@@ -82,11 +76,8 @@ test("wrapSelection", async (t) => {
   });
 
   await t.test("documents the */** ambiguity: italicizing text already inside ** peels one marker off each side", () => {
-    // wrapSelection can't tell "the single '*' just outside the
-    // selection" apart from "the outer half of a '**' pair" — this is a
-    // known, undisambiguated limitation (see the function's doc comment
-    // in app.js), pinned here so a future change to that logic is a
-    // deliberate one.
+    // wrapSelection can't tell a single "*" just outside the selection apart from the
+    // outer half of a "**" pair — known limitation, pinned so a future change is deliberate.
     const { window } = freshApp();
     const cm = fakeCm("**bold**");
     cm.setSelection({ line: 0, ch: 2 }, { line: 0, ch: 6 }); // "bold"
@@ -121,10 +112,7 @@ test("toggleLinePrefix", async (t) => {
   });
 
   await t.test("ordered-list numbering is sequential across only the freshly-added lines", () => {
-    // Bug fix regression: `n` used to advance for every touched line,
-    // including ones skipped because they already had a number — on a
-    // partially-numbered selection that produced duplicate/skipped
-    // numbers instead of a clean 1. 2. 3. sequence.
+    // Bug fix: `n` used to advance for every touched line, including skipped ones.
     const { window } = freshApp();
     const cm = fakeCm("1. one\ntwo\nthree");
     cm.setSelection({ line: 0, ch: 0 }, { line: 2, ch: 5 });
@@ -185,9 +173,7 @@ test("setHeading / cycleHeading", async (t) => {
   });
 
   await t.test("a heading marker with no following space is left alone and gets re-prefixed", () => {
-    // /^(#{1,6})\s+/ requires whitespace after the hashes, so "###nospace"
-    // doesn't match the existing-heading branch — this pins that as
-    // current behavior rather than an assumed fix.
+    // /^(#{1,6})\s+/ requires whitespace after the hashes — pins current behavior.
     const { window } = freshApp();
     const cm = fakeCm("###nospace");
     cm.setCursor({ line: 0, ch: 0 });

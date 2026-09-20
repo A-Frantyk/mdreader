@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 pub(super) fn slugify(text: &str) -> String {
     let mut slug = String::new();
-    let mut last_was_dash = true; // suppress leading dash
+    let mut last_was_dash = true;
     for ch in text.chars().flat_map(|c| c.to_lowercase()) {
         if ch.is_alphanumeric() {
             slug.push(ch);

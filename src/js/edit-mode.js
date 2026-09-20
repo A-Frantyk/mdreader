@@ -1,15 +1,8 @@
 // Entering/exiting split (view+editor) mode for a tab.
 
-// Renames every Markdown token markdown.js/gfm.js would otherwise emit
-// under a shared CodeMirror vocabulary (cm-header, cm-string, cm-keyword,
-// ...) to its own md-prefixed namespace. This is what lets
-// codemirror-theme-{light,dark}.css (build.rs's generate_codemirror_theme_css,
-// code-token colors) and styles.css's cm-md-* rules (Markdown structure)
-// own disjoint classes by construction, instead of the old scheme of
-// hand-picking three classes for markdown.js to keep — see the
-// two-theme-layer invariant in CLAUDE.md. Keys are exactly
-// markdown.js's tokenTypes table; tests/pure-helpers.test.mjs asserts
-// this stays in sync with the vendored mode if it's ever upgraded.
+// Renames markdown.js's own token types to an md-prefixed namespace — see CLAUDE.md's
+// two-theme-layer invariant. pure-helpers.test.mjs asserts this stays in sync with the
+// vendored mode if it's ever upgraded.
 const MARKDOWN_TOKEN_TYPES = {
   header: "md-header",
   code: "md-code",
@@ -32,10 +25,8 @@ const MARKDOWN_TOKEN_TYPES = {
   emoji: "md-emoji",
 };
 
-/// Builds the formatting toolbar for `tab`'s editor pane. Must be
-/// appended into editorPane *before* `new CodeMirror(...)` — CodeMirror's
-/// constructor appends its own wrapper rather than replacing container
-/// contents, so toolbar-first in the DOM is what puts it visually on top.
+// Must be appended before `new CodeMirror(...)` — CodeMirror appends its own wrapper
+// rather than replacing container contents.
 function createEditorToolbar(tab) {
   const bar = document.createElement("div");
   bar.className = "editor-toolbar";
@@ -65,24 +56,15 @@ async function enterSplitMode(tab) {
   await ensureCodeMirror();
 
   if (tab.source === null) {
-    // Not part of open_markdown_file's payload — see read_markdown_source
-    // in lib.rs for why that's a separate, lazily-fetched call rather
-    // than doubling every view-only open's IPC payload with source text
-    // nobody reads in view mode.
+    // Not part of open_markdown_file's payload — a lazily-fetched separate call instead
+    // of doubling every view-only open's IPC payload with source nobody reads.
     tab.source = await tauri.core.invoke("read_markdown_source", { path: tab.path });
     tab.savedSource = tab.source;
   }
 
-  // Flip the pane into split mode *before* creating CodeMirror, not
-  // after: .editor-pane defaults to display:none and only becomes
-  // display:block once .tab-pane carries the "split" class (see
-  // styles.css). Constructing CodeMirror inside a still-hidden container
-  // makes it measure a zero-width/zero-height element and cache that —
-  // refresh() afterward doesn't reliably recover from it in practice.
-  // Doing this first means the editor's very first layout pass sees a
-  // real, visible container, with the trailing refresh() below kept only
-  // as a defensive re-measure for the "already exists, pane was hidden
-  // in between" path.
+  // Before creating CodeMirror, not after: constructing it inside a still-hidden
+  // container (.editor-pane defaults to display:none) makes it cache a zero-size
+  // measurement that refresh() doesn't reliably recover from.
   tab.mode = "split";
   tab.paneEl.classList.add("split");
   tab.paneEl.style.setProperty("--split-ratio", `${splitRatio()}%`);
@@ -90,14 +72,11 @@ async function enterSplitMode(tab) {
   if (!tab.editorEl) {
     const editorPane = document.createElement("div");
     editorPane.className = "editor-pane";
-    // Toolbar first — see createEditorToolbar's comment on why DOM order
-    // here matters (CodeMirror appends, it doesn't replace).
-    const toolbar = createEditorToolbar(tab);
+    const toolbar = createEditorToolbar(tab); // must precede CodeMirror construction below
     editorPane.appendChild(toolbar);
     const splitter = document.createElement("div");
     splitter.className = "pane-splitter";
-    // Deliberately no tabindex or keyboard resize here — a bigger
-    // decision than "make the drag work."
+    // No tabindex/keyboard resize — a bigger decision than "make the drag work."
     splitter.setAttribute("role", "separator");
     splitter.setAttribute("aria-orientation", "vertical");
     tab.paneEl.insertBefore(editorPane, tab.previewEl);
@@ -105,28 +84,17 @@ async function enterSplitMode(tab) {
     tab.splitterEl = splitter;
     attachSplitterDrag(tab, splitter);
 
-    // If construction throws (e.g. a missing mode dependency — see the
-    // overlay.js comment in ensureCodeMirror), don't leave the pane
-    // claiming to be in split mode with a half-built, empty editor: undo
-    // the DOM and the mode flip before rethrowing, so a failed edit-mode
-    // entry visibly fails (toggleEditMode's catch just console.errors —
-    // it doesn't know to check DOM state) rather than looking like it
-    // succeeded with nothing in it.
+    // If construction throws, undo the DOM and mode flip before rethrowing — otherwise
+    // the pane claims split mode with a half-built, empty editor.
     try {
       tab.editor = new window.CodeMirror(editorPane, {
         value: tab.source,
-        // highlightFormatting: markdown.js defaults this off, which means
-        // a syntax marker (#, **, >, `, [](), list bullets) shares its
-        // content's own token class — with no way to style the marker
-        // dimmer than the text it wraps. Turning it on is what makes
-        // "flat, source-first" possible at all; see CLAUDE.md.
+        // highlightFormatting: true is load-bearing — see CLAUDE.md's two-theme-layer invariant.
         mode: { name: "gfm", highlightFormatting: true, tokenTypeOverrides: MARKDOWN_TOKEN_TYPES },
         theme: "mdreader mdreader-syntax",
         lineWrapping: true,
         lineNumbers: true,
-        // These only fire while the editor has focus, so they can't
-        // collide with the global keydown handler's own Cmd/Ctrl+F, +W.
-        extraKeys: editorExtraKeys(),
+        extraKeys: editorExtraKeys(), // only fire while the editor has focus
       });
     } catch (err) {
       toolbar.remove();

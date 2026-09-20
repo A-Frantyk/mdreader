@@ -1,7 +1,5 @@
-// The tab lifecycle: creation, activation, dirty tracking, and the
-// identity-based re-resolution closeTab/confirmClosable rely on to stay
-// correct when a modal await lets the tab bar change out from under a
-// stale index.
+// The tab lifecycle: creation, activation, dirty tracking, and the identity-based
+// re-resolution closeTab/confirmClosable rely on when a modal await shifts indices.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { freshApp } from "./harness.mjs";
@@ -117,11 +115,8 @@ test("markDirty", async (t) => {
 
 test("closeTab", async (t) => {
   await t.test("re-resolves which tab to close by identity, not by the stale index argument", async () => {
-    // Simulates the exact race closeTab's own comment describes: while
-    // closeTab(1) (intending to close `b`) is awaiting confirmClosable,
-    // something else closes `a` first — shifting b from index 1 to 0. A
-    // version that trusted the original `index` would splice out `c`
-    // instead.
+    // closeTab(1) intends to close `b`; something else closes `a` first mid-await,
+    // shifting b to index 0 — trusting the original index would splice out `c` instead.
     const { window, app } = freshApp();
     const a = window.createTabShell({ title: "a" });
     const b = window.createTabShell({ title: "b" });
@@ -135,10 +130,7 @@ test("closeTab", async (t) => {
 
     await window.closeTab(1);
 
-    // Compared by length + reference (not deepEqual) — state.tabs is an
-    // array built inside jsdom's realm, and deepStrictEqual treats a
-    // same-shaped array from a different realm as unequal regardless of
-    // element identity.
+    // Length + reference, not deepEqual — a cross-realm array trips deepStrictEqual.
     assert.equal(app.state.tabs.length, 1);
     assert.equal(app.state.tabs[0], c);
   });

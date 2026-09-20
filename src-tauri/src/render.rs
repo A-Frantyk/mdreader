@@ -1,38 +1,8 @@
-//! Markdown -> sanitized HTML rendering.
-//!
-//! Everything runs as ONE pass over the parser's event stream, transformed
-//! and fed through a single `pulldown_cmark::html::push_html` call —
-//! `HtmlWriter` carries state across events (table head/body, footnote
-//! numbering), so calling it more than once per document silently corrupts
-//! that state. Code fences are rewritten into a single `Event::Html(..)`
-//! per block; headings keep their real `Start`/`End` events (only `id` is
-//! overridden, with an anchor `<a>` spliced in as a sibling `Event::Html`),
-//! so their inline markup still gets pulldown-cmark's own rendering.
-//! Everything else flows through untouched.
-//!
-//! Relative image/link destinations are resolved to absolute filesystem
-//! paths here, not in the frontend: this is the only place that knows the
-//! document's directory and has real path semantics (`std::path`, not a
-//! separator-sniffing guess). Images additionally get their resolved path
-//! returned so the caller can grant the webview's asset-protocol scope
-//! access to exactly that file. A resolved path is emitted as `data-path`,
-//! never `src`/`href` — ammonia applies URL semantics to those, and a
-//! Windows path (`C:\...`) parses as URL scheme `c`, silently dropping the
-//! whole attribute. See `events::resolve_event`'s comment for the full
-//! story.
-//!
-//! Mermaid and math are NOT rendered here. We only detect their presence
-//! so the frontend can lazy-load the (heavy) mermaid.js / KaTeX bundles
-//! only for documents that actually need them. Mermaid fences are left as
-//! `<pre class="mermaid">RAW_SOURCE</pre>` for mermaid.js to pick up
-//! client-side; math is left as literal `$...$` / `$$...$$` text for
-//! KaTeX's auto-render extension to find and typeset client-side.
-//!
-//! The driver here owns the single parser pass and the transformed event
-//! accumulator; each concern it delegates to has its own submodule:
-//! `paths` (destination resolution), `events` (Link/Image -> HTML),
-//! `headings` (slug/id generation), `highlight` (syntect fences), and
-//! `sanitize` (the ammonia allowlist).
+//! Markdown -> sanitized HTML: single parser pass, single `push_html` call
+//! (see CLAUDE.md's one-`push_html`-call invariant). Delegates to `paths`
+//! (destination resolution), `events` (Link/Image -> HTML), `headings`
+//! (slug/id generation), `highlight` (syntect fences), `sanitize` (ammonia
+//! allowlist) — see CLAUDE.md's path-resolution invariant for `data-path`.
 
 mod events;
 mod headings;
@@ -92,7 +62,6 @@ pub fn render(source: &str, base_dir: &Path) -> (RenderedDoc, Vec<PathBuf>) {
     let mut title: Option<String> = None;
     let mut assets: Vec<PathBuf> = Vec::new();
 
-    // The transformed stream fed to the single, final `push_html` call.
     let mut transformed: Vec<Event> = Vec::new();
 
     let mut parser = Parser::new_ext(source, options);
@@ -124,21 +93,14 @@ pub fn render(source: &str, base_dir: &Path) -> (RenderedDoc, Vec<PathBuf>) {
                 transformed.push(Event::Html(CowStr::from(block_html)));
             }
             Event::Start(Tag::Heading { level, id, classes, attrs }) => {
-                // Buffered events still flow through the one shared
-                // push_html call below — a separate call here shipped
-                // once, breaking nested image/link resolution and
-                // footnote numbering for anything nested in a heading.
+                // Buffered, not push_html'd separately — a second call here shipped once and broke
+                // footnote numbering (CLAUDE.md's one-push_html invariant).
                 let mut inner: Vec<Event> = Vec::new();
                 let mut plain = String::new();
                 while let Some(inner_event) = parser.next() {
                     match inner_event {
                         Event::End(TagEnd::Heading(_)) => break,
-                        // A local image's alt text is drained by
-                        // resolve_image_event itself (see below), so it
-                        // can't reach the Text/Code arm below the way it
-                        // does for a non-local image — fold it into `plain`
-                        // here instead, to keep contributing to the
-                        // heading's slug/TOC text either way.
+                        // resolve_image_event drains a local image's alt text, so fold it into `plain` here.
                         Event::Start(tag @ Tag::Image { .. }) => {
                             let (ev, alt) = resolve_image_event(tag, base_dir, &mut parser, &mut assets);
                             plain.push_str(&alt);

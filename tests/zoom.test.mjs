@@ -1,6 +1,5 @@
-// App-wide zoom: persistence (zoomFactor covered in pure-helpers.test.mjs),
-// stepping/reset, and that applying zoom invokes the native command and
-// re-measures every open tab's CodeMirror instance.
+// App-wide zoom: stepping/reset, and that applying zoom invokes the native command
+// and re-measures every open tab's CodeMirror instance.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { freshApp } from "./harness.mjs";
@@ -30,10 +29,8 @@ test("applyZoom", async (t) => {
 
     await window.applyZoom();
 
-    // A plain assert.deepEqual on the whole call trips Node's cross-realm
-    // "same structure but not reference-equal" check — `payload` is an
-    // object literal built inside the jsdom window, not this test's own
-    // realm — so the fields are compared individually instead.
+    // `payload` is a cross-realm object literal — assert.deepEqual would trip on
+    // "same structure but not reference-equal", so fields are compared individually.
     assert.equal(calls.length, 1);
     assert.equal(calls[0].cmd, "set_zoom");
     assert.equal(calls[0].payload.factor, 1.25);

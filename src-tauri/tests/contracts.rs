@@ -13,11 +13,8 @@ fn repo_file(rel: &str) -> String {
     std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()))
 }
 
-/// Concatenation of every file in src/js/ — the frontend is a series of
-/// classic scripts sharing one global scope (see CLAUDE.md), not one file,
-/// so `handleMenuAction` could in principle live in any of them. Reading
-/// the whole directory rather than a hardcoded path means this check
-/// doesn't need an edit if that file ever moves again.
+/// Concatenation of every file in src/js/ (classic scripts, one global scope — see
+/// CLAUDE.md), so `handleMenuAction` can live in any of them without this check moving.
 fn repo_js_sources() -> String {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("src/js");
     let mut entries: Vec<_> = std::fs::read_dir(&dir)
@@ -34,13 +31,8 @@ fn repo_js_sources() -> String {
         .join("\n")
 }
 
-/// menu.rs's NEW/OPEN/SAVE/QUIT id constants and the frontend's
-/// handleMenuAction switch are a string contract across two languages —
-/// nothing else checks that a rename on one side doesn't silently orphan
-/// a menu item as a no-op on the other. `menu` isn't a `pub` module (no
-/// reason for it to be, outside this one cross-file check), so this reads
-/// both sides as text rather than adding a visibility hole to production
-/// code just for a test to import through.
+/// menu.rs's id constants and the frontend's handleMenuAction switch are a string
+/// contract across two languages; `menu` isn't `pub`, so this reads both as text.
 #[test]
 fn menu_ids_match_the_frontend_switch() {
     let menu_rs = repo_file("src-tauri/src/menu.rs");
@@ -62,13 +54,8 @@ fn menu_ids_match_the_frontend_switch() {
     }
 }
 
-/// `PredefinedMenuItem::close_window` must never be constructed in
-/// menu.rs — see its module doc. This was a real, shipped bug: it
-/// hijacks Cmd+W on macOS before the webview's own "close active tab"
-/// handler ever sees the keystroke. Checks for the call, not just the
-/// word — the module doc comment itself mentions "close_window" several
-/// times to explain the omission, so a plain substring check on the
-/// whole file would trip on its own documentation.
+/// Shipped bug: `close_window` hijacks Cmd+W on macOS before this app's own handler
+/// sees it. Checks for the call, not the word — menu.rs's own doc mentions it too.
 #[test]
 fn menu_never_offers_close_window() {
     let menu_rs = repo_file("src-tauri/src/menu.rs");
@@ -78,19 +65,9 @@ fn menu_never_offers_close_window() {
     );
 }
 
-/// The generated CodeMirror syntax theme and the hand-written chrome
-/// theme in styles.css must own disjoint token-class selectors — see
-/// build.rs's generate_codemirror_theme_css doc comment. They're disjoint
-/// by *namespace* now (edit-mode.js's tokenTypeOverrides renames every
-/// Markdown token to `cm-md-*`), not by a hardcoded list of classes
-/// styles.css keeps for itself, so this asserts the contract both
-/// directions without hardcoding which classes those are: whatever plain
-/// CodeMirror classes the generated theme actually defines, styles.css
-/// must not also define a `.cm-s-mdreader .cm-<that class>` rule for; and
-/// styles.css's own cm-md-* namespace must never leak into the generated
-/// file. If both ever did define the same class, which one wins would
-/// depend on stylesheet link order — this was caught and fixed once
-/// already, on the previous hardcoded-list version of this contract.
+/// The generated CodeMirror theme and styles.css's chrome must own disjoint token-class
+/// selectors by *namespace*, not a hardcoded list — see CLAUDE.md's two-theme-layer
+/// invariant. A collision's winner would depend on link order; caught once already.
 #[test]
 fn generated_codemirror_themes_avoid_selectors_owned_by_styles_css() {
     let styles_css = repo_file("src/styles.css");
@@ -117,10 +94,8 @@ fn generated_codemirror_themes_avoid_selectors_owned_by_styles_css() {
     }
 }
 
-/// Every `--syntax-*` custom property styles.css reads must be defined in
-/// *both* generated palettes — build.rs's syntax_root_css. A typo'd
-/// property name degrades silently to its `var()` fallback rather than
-/// erroring, so this is the only thing that would catch one.
+/// A typo'd `--syntax-*` property degrades silently to its `var()` fallback rather than
+/// erroring — this is the only thing that would catch one.
 #[test]
 fn syntax_custom_properties_defined_in_both_themes() {
     let styles_css = repo_file("src/styles.css");
@@ -148,12 +123,8 @@ fn syntax_custom_properties_defined_in_both_themes() {
     assert!(checked > 0, "expected styles.css to reference at least one --syntax-* property");
 }
 
-/// A broken VS Code JSON → syntect `Theme` conversion (build.rs's
-/// `load_vscode_theme`) could silently drop almost every scope — e.g. a
-/// panic-free `.and_then` chain returning `None` everywhere — without the
-/// build failing. Both vendored themes define 200+ tokenColors entries;
-/// a healthy conversion should carry the overwhelming majority of them
-/// through as distinct CSS rules.
+/// A broken JSON->Theme conversion could silently drop almost every scope without the
+/// build failing. Both vendored themes define 200+ tokenColors entries.
 #[test]
 fn generated_code_theme_css_has_substantial_rule_count() {
     for file in ["src/code-theme-light.css", "src/code-theme-dark.css"] {
@@ -167,10 +138,8 @@ fn generated_code_theme_css_has_substantial_rule_count() {
     }
 }
 
-/// A broken `codemirror_theme_css`/`css_for_theme_with_class_style` could
-/// emit two byte-identical files for light and dark without the build
-/// failing — nothing would notice until someone opened the editor in dark
-/// mode and every fence token was still light-theme-colored.
+/// A broken generator could emit byte-identical light/dark files without the build
+/// failing — nothing would notice until dark mode showed light-theme-colored fences.
 #[test]
 fn generated_themes_differ_between_light_and_dark() {
     for (light, dark) in [

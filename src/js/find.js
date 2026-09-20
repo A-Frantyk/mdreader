@@ -1,7 +1,5 @@
 // In-page find, implemented by walking and marking text nodes (no native find API in the webview).
 
-// The webview exposes no scriptable native find, so this walks the
-// active tab's text nodes and wraps matches in <mark>.
 function activeRoot() {
   return state.tabs[state.activeIndex]?.contentEl ?? null;
 }
@@ -32,9 +30,7 @@ function clearMarks(root) {
     parent.replaceChild(document.createTextNode(mark.textContent), mark);
     parents.add(parent);
   });
-  // normalize() walks its whole subtree — once per unique parent instead
-  // of once per mark, so clearing 500 hits under one container is O(1)
-  // subtree walks, not O(500).
+  // Once per unique parent, not once per mark — O(1) subtree walks, not O(500).
   parents.forEach((p) => p.normalize());
 }
 

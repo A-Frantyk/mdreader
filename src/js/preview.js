@@ -7,13 +7,9 @@ function schedulePreview(tab) {
   tab.previewTimer = setTimeout(() => runPreview(tab), PREVIEW_DEBOUNCE_MS);
 }
 
-/// Re-renders `tab`'s preview from the editor's current value. At most
-/// one `render_markdown` call in flight per tab — a change that lands
-/// mid-render doesn't queue a second invoke, it sets `previewStale` and
-/// this re-fires itself once the in-flight one resolves. A `previewSeq`
-/// counter guards against applying a response that's been superseded by
-/// a newer one that happened to resolve first (async commands can
-/// complete out of order).
+// At most one render_markdown call in flight per tab — a change mid-render sets
+// previewStale and re-fires once the in-flight one resolves. previewSeq guards
+// against applying a response superseded by one that resolved first out of order.
 async function runPreview(tab) {
   if (tab.previewInFlight) {
     tab.previewStale = true;
@@ -37,9 +33,8 @@ async function runPreview(tab) {
     const isActive = state.tabs[state.activeIndex] === tab;
     if (isActive) updateToc(tab);
 
-    // Mermaid/KaTeX must not run against a hidden subtree — if the tab
-    // isn't visible, skip and let activateTab's previewNeedsEnrich check
-    // catch it on the next activation instead.
+    // Must not run against a hidden subtree — activateTab's previewNeedsEnrich picks it
+    // up on the next activation instead.
     if (isActive) {
       if (tab.hasMermaid) await renderMermaidFor(tab);
       if (tab.hasMath) await renderMathFor(tab.contentEl);

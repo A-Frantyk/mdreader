@@ -2,18 +2,12 @@
 // it, plus the About dialog (a second, simpler modal reusing the same
 // .modal-backdrop/.modal CSS).
 
-// ---------------------------------------------------------------------
-// Unsaved-changes modal + quit sequence. This is the app's first custom
-// modal — native tauri.dialog.confirm only offers two buttons, and "ask
-// the user whether to save" needs three (Save / Don't Save / Cancel).
-// ---------------------------------------------------------------------
+// Custom modal — native tauri.dialog.confirm only offers two buttons, this needs three.
 let modalOpen = false;
 let modalResolve = null;
 
-/// Shows the shared unsaved-changes modal for `tab`, resolving once the
-/// user picks "save" | "dont-save" | "cancel". `modalOpen` is checked by
-/// the global keydown handler and the menu-action dispatcher so neither
-/// reaches through the backdrop while this is up.
+// modalOpen is checked by the global keydown handler and menu-action dispatcher so
+// neither reaches through the backdrop while this is up.
 function confirmUnsaved(tab) {
   return new Promise((resolve) => {
     const previouslyFocused = document.activeElement;
@@ -33,12 +27,9 @@ function confirmUnsaved(tab) {
 
 let quitting = false;
 
-/// Quitting closes every tab at once; a Cancel anywhere aborts the
-/// *whole* quit, so — unlike closeTab — nothing is spliced out of
-/// state.tabs until every dirty tab has been resolved. Re-resolving each
-/// tab's index by identity on every iteration guards against the same
-/// "the tab bar changed while awaiting a dialog" hazard closeTab
-/// documents, here across a whole loop of modals and save dialogs.
+// A Cancel anywhere aborts the whole quit — unlike closeTab, nothing is spliced out
+// of state.tabs until every dirty tab is resolved. Re-resolves each tab's index by
+// identity every iteration, same hazard closeTab guards against.
 async function requestQuit() {
   if (quitting || modalOpen) return;
   quitting = true;
@@ -65,12 +56,7 @@ async function requestQuit() {
   }
 }
 
-// ---------------------------------------------------------------------
-// About dialog. Opened via the native menu's ABOUT id (menu.rs) — see
-// handleMenuAction in js/main.js. `aboutOpen` is checked by the same
-// global keydown handler and menu-action dispatcher as `modalOpen`, for
-// the same reason: a native menu press isn't blocked by any DOM backdrop.
-// ---------------------------------------------------------------------
+// aboutOpen is checked by the same keydown/menu-action guards as modalOpen.
 let aboutOpen = false;
 let aboutPreviouslyFocused = null;
 

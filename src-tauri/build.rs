@@ -8,16 +8,9 @@ use syntect::highlighting::{
 use syntect::html::{css_for_theme_with_class_style, ClassStyle};
 use syntect::parsing::Scope;
 
-/// Runs at build time, not runtime: it's a pure function of the two vendored
-/// theme JSON files (see `load_vscode_theme`), so this avoids re-parsing and
-/// re-resolving them on every launch — the frontend just links a static
-/// stylesheet, no FOUC.
-///
-/// Two separate plain files, not one merged with a media query: the
-/// frontend has a manual Light/Dark override on top of OS dark-mode
-/// following, and swapping which stylesheet is linked (see app.js's
-/// `setCodeThemeLink`) is simpler than rewriting every one of syntect's
-/// generated class selectors to carry a `[data-theme]` condition.
+/// Two static files, not one merged with a media query: the app has a manual
+/// Light/Dark toggle that swaps which stylesheet is linked, simpler than rewriting
+/// every syntect selector to carry a `[data-theme]` condition.
 fn generate_code_theme_css() {
     let light = load_vscode_theme("themes/one-light.json");
     let dark = load_vscode_theme("themes/one-dark-pro.json");
@@ -39,21 +32,9 @@ fn generate_code_theme_css() {
     );
 }
 
-/// Emits the `--syntax-*` custom properties the editor pane's chrome and
-/// styles.css's flat markdown-source token rules (`cm-md-*`) key off of —
-/// see the two-theme-layer invariant in CLAUDE.md. Lives in
-/// code-theme-*.css specifically because that stylesheet is linked eagerly
-/// in index.html and swapped by theme.js's `setCodeThemeLink`, so the
-/// properties exist from first paint; codemirror-theme-*.css is only
-/// injected lazily on first editor open (loaders.js's `ensureCodeMirror`)
-/// and can't host page-level tokens a session that never opens the editor
-/// still needs (e.g. the preview's fence background).
-///
-/// styles.css is linked *after* code-theme-*.css (index.html), so it must
-/// never redefine any `--syntax-*` name in `:root` — that would win the
-/// cascade and pin every theme to whichever was linked last. It's meant
-/// to only ever read these with a `var(--syntax-x, var(--editor-x))`
-/// fallback.
+/// Emits the `--syntax-*` custom properties — see CLAUDE.md's theme-sourcing
+/// invariant for why this lives in the eagerly-linked code-theme-*.css, and why
+/// styles.css must never redefine one of these names in its own `:root`.
 fn syntax_root_css(theme: &Theme) -> String {
     let highlighter = Highlighter::new(theme);
     let default = highlighter.get_default();
@@ -61,9 +42,7 @@ fn syntax_root_css(theme: &Theme) -> String {
         if c.a == 255 {
             format!("#{:02x}{:02x}{:02x}", c.r, c.g, c.b)
         } else {
-            // Preserve alpha (e.g. a translucent selection/line-highlight
-            // overlay) rather than flattening it to opaque — WebKit (this
-            // app's only target webview) accepts 8-digit hex.
+            // Preserve alpha rather than flattening to opaque — WebKit accepts 8-digit hex.
             format!("#{:02x}{:02x}{:02x}{:02x}", c.r, c.g, c.b, c.a)
         }
     };
@@ -81,14 +60,8 @@ fn syntax_root_css(theme: &Theme) -> String {
     let caret = s.caret.map(hex).unwrap_or_else(|| fg.clone());
     let line_highlight = s.line_highlight.map(hex).unwrap_or_else(|| bg.clone());
 
-    // Markdown-specific scopes, resolved the same way real highlighted text
-    // would be — through the theme's own rule hierarchy, not a hardcoded
-    // guess. `markup.quote.markdown` / `beginning.punctuation.definition
-    // .list.markdown` (rather than the shorter `markup.quote` /
-    // `punctuation.definition.list.begin.markdown`) are deliberate: they're
-    // the scope names both vendored themes actually define a rule for —
-    // verified by inspecting themes/one-dark-pro.json and
-    // themes/one-light.json directly, not assumed from convention.
+    // Scope names verified against both vendored theme JSON files directly, not assumed
+    // from convention — e.g. markup.quote.markdown, not the shorter markup.quote.
     let md_header = scope_color("markup.heading");
     let md_strong = scope_color("markup.bold");
     let md_em = scope_color("markup.italic");
@@ -97,11 +70,8 @@ fn syntax_root_css(theme: &Theme) -> String {
     let md_link = scope_color("markup.underline.link.markdown");
     let md_quote = scope_color("markup.quote.markdown");
     let md_list = scope_color("beginning.punctuation.definition.list.markdown");
-    // The generic dim-marker color for syntax punctuation (`#`, `**`, list
-    // bullets, link hrefs). Neither theme's punctuation rules are
-    // consistently dim — One Light paints most punctuation at full
-    // foreground — so this borrows the `comment` scope instead, which both
-    // themes render genuinely recessive.
+    // Borrows the `comment` scope for punctuation: One Light paints punctuation at
+    // full foreground, so neither theme's own punctuation rule is reliably dim.
     let punct = scope_color("comment");
 
     format!(
@@ -126,20 +96,9 @@ fn syntax_root_css(theme: &Theme) -> String {
     )
 }
 
-/// Parses a VS Code theme JSON file (`themes/*.json`, vendored verbatim —
-/// see `themes/LICENSE-THEMES.md`) into a syntect `Theme`. A VS Code
-/// theme's `tokenColors` array *is* a TextMate scope table — each entry's
-/// `scope` (a string or array of comma/pipe-joined selectors) and
-/// `settings.foreground`/`background` map directly onto syntect's
-/// `ThemeItem`/`StyleModifier`, so this needs no plist round-trip and no
-/// extra crate beyond the `serde_json` already used by
-/// `generate_markdown_extensions`.
-///
-/// `settings.fontStyle` is deliberately never read here: the editor's
-/// markdown-source tokens are rendered flat by design (see CLAUDE.md's
-/// two-theme-layer invariant) and `css_for_theme_with_class_style`'s own
-/// output (consumed by the read-only preview) only ever emits `color`/
-/// `background-color` regardless, so there is no caller that would use it.
+/// A VS Code theme's `tokenColors` array *is* a TextMate scope table, so this maps
+/// directly onto syntect's `ThemeItem`/`StyleModifier` — no plist round-trip needed.
+/// `settings.fontStyle` is deliberately never read — see CLAUDE.md's flat-rendering invariant.
 fn load_vscode_theme(relative_path: &str) -> Theme {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(relative_path);
     println!("cargo:rerun-if-changed={}", path.display());
@@ -172,9 +131,7 @@ fn load_vscode_theme(relative_path: &str) -> Theme {
                 .filter_map(Value::as_str)
                 .collect::<Vec<_>>()
                 .join(","),
-            // VS Code themes occasionally carry a scopeless entry for
-            // editor-UI-only settings rather than a token rule — not a
-            // ThemeItem, skip rather than error.
+            // Scopeless entries are editor-UI-only settings, not a token rule — skip.
             _ => continue,
         };
         if scope_str.trim().is_empty() {
@@ -222,11 +179,8 @@ fn load_vscode_theme(relative_path: &str) -> Theme {
     }
 }
 
-/// Parses a CSS hex color (`#rgb`, `#rgba`, `#rrggbb`, or `#rrggbbaa` — VS
-/// Code themes use all four, e.g. one-dark-pro.json's 8-digit translucent
-/// selection color) into syntect's `Color`. Returns `None` (never panics)
-/// on anything else, so one malformed value degrades to "no rule" rather
-/// than failing the whole build.
+/// Parses `#rgb`/`#rgba`/`#rrggbb`/`#rrggbbaa` — VS Code themes use all four. Returns
+/// `None`, never panics, so one malformed value degrades to "no rule."
 fn parse_hex_color(s: &str) -> Option<Color> {
     let s = s.trim().strip_prefix('#')?;
     let digit_pair = |i: usize| u8::from_str_radix(s.get(i..i + 2)?, 16).ok();
@@ -243,25 +197,10 @@ fn parse_hex_color(s: &str) -> Option<Color> {
     }
 }
 
-/// Generates the *editor's* fence-highlighting colors from the same two
-/// vendored themes `generate_code_theme_css` uses, so code looks the same
-/// in the read-only preview and the split-mode editor (`cm-s-mdreader-syntax`).
-///
-/// This can't reuse `css_for_theme_with_class_style` above — that emits
-/// CSS keyed by syntect's *own* generated class names, which don't
-/// correspond to CodeMirror 5's token classes (`.cm-keyword`,
-/// `.cm-string`, ...). Instead this asks syntect's `Highlighter` — the
-/// same lookup it uses internally to color real tokenized text — what
-/// color a given scope resolves to, then hand-writes CSS rules mapping
-/// CodeMirror's token class names to the nearest TextMate scope.
-///
-/// Deliberately does *not* emit background/foreground/cursor/gutter rules
-/// — those come from `syntax_root_css`'s `--syntax-*` properties instead,
-/// consumed directly by styles.css's `.cm-s-mdreader` block. Markdown's own
-/// tokens (headings, emphasis, links, ...) are namespaced to `cm-md-*` via
-/// `edit-mode.js`'s `tokenTypeOverrides` and owned by styles.css too — this
-/// function's output is scoped to plain CodeMirror code-token classes only,
-/// so the two theme layers can't collide by construction. See CLAUDE.md.
+/// Can't reuse `css_for_theme_with_class_style` — its classes don't correspond to
+/// CodeMirror 5's (`.cm-keyword`, ...). Asks the `Highlighter` what color a scope
+/// resolves to, then hand-writes those onto CodeMirror's class names. Scoped to
+/// plain code-token classes only — see CLAUDE.md's two-theme-layer invariant.
 fn generate_codemirror_theme_css() {
     let light = load_vscode_theme("themes/one-light.json");
     let dark = load_vscode_theme("themes/one-dark-pro.json");
@@ -282,12 +221,7 @@ fn codemirror_theme_css(theme: &Theme) -> String {
         highlighter.style_for_stack(&[s]).foreground
     };
 
-    // (CodeMirror class, TextMate scope to query). cm-comment /
-    // cm-variable-2 / cm-tag were historically omitted here because
-    // markdown.js reused those exact class names for non-code purposes —
-    // that's no longer true: edit-mode.js's tokenTypeOverrides moves every
-    // Markdown token to its own cm-md-* namespace, freeing the full
-    // CodeMirror vocabulary for this generated theme.
+    // (CodeMirror class, TextMate scope to query).
     let rules: &[(&str, &str)] = &[
         ("cm-keyword", "keyword"),
         ("cm-atom", "constant.language"),
@@ -316,9 +250,7 @@ fn codemirror_theme_css(theme: &Theme) -> String {
     for &(class, scope) in rules {
         let color = scope_color(scope);
         if color == default_fg {
-            // style_for_stack falls back to the theme's default foreground
-            // for any scope it has no rule for — emitting a rule here
-            // would be a pure no-op that just costs a selector.
+            // No distinct rule for this scope — emitting one would be a no-op selector.
             println!(
                 "cargo:warning=codemirror theme: scope {scope:?} (.{class}) has no distinct \
                  color in {:?}, skipping",
@@ -340,19 +272,10 @@ fn write_css(file_name: &str, css: &str) {
     });
 }
 
-/// Extracts `bundle.fileAssociations[].ext` from `tauri.conf.json` into a
-/// `MARKDOWN_EXTENSIONS` constant lib.rs `include!()`s, so the OS-registration
-/// config stays the one source of truth for what counts as "markdown."
-///
-/// This has to happen at *build* time, not runtime: `tauri_utils::config`'s
-/// codegen for embedding the config into the compiled binary
-/// (`impl ToTokens for BundleConfig`) unconditionally hardcodes
-/// `file_associations` — along with several other bundler-only fields — to
-/// `None`, regardless of what's in the JSON. `Context::config()` can
-/// therefore never see it at runtime, on any platform or build profile.
-/// (Confirmed by reading tauri-utils' source after this exact assumption
-/// silently broke file-opening on every OS: the app read `None` back,
-/// filtered every path out, and dropped it with no error.)
+/// Build-time, not runtime: `tauri_utils::config`'s codegen for embedding config into
+/// the binary (`impl ToTokens for BundleConfig`) unconditionally hardcodes
+/// `file_associations` to `None` — `Context::config()` can never see it at runtime, on
+/// any platform. Shipped bug: file-opening silently broke everywhere before this existed.
 fn generate_markdown_extensions() {
     let conf_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tauri.conf.json");
     let raw = std::fs::read_to_string(&conf_path)

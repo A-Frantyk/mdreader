@@ -15,17 +15,8 @@ pub(crate) struct OpenedDocument {
     doc: render::RenderedDoc,
 }
 
-/// Render markdown source and grant the webview's asset-protocol scope
-/// access to exactly the local images it references. Shared by the
-/// file-open path and the live-preview path (`render_markdown`) — both
-/// need the same grant-on-render behavior, because `render()` returns a
-/// fresh asset list on every call and a re-render that introduces a new
-/// image reference must re-grant scope or the image silently fails to
-/// load. Grants are additive and never revoked for the app's lifetime.
-///
-/// Under live preview this runs on every debounced keystroke, and a
-/// half-typed path (`![](diagram.png)` mid-type grants `d`, `di`, `dia`,
-/// …) would flood the scope set without the `is_file()` filter below.
+/// Shared by the file-open and live-preview paths. Scope grants are additive and never
+/// revoked — see CLAUDE.md's scope.allow_file invariant for why `is_file()` below matters.
 pub(crate) fn render_and_grant(app: &AppHandle, source: &str, base_dir: &Path) -> render::RenderedDoc {
     let (doc, assets) = render::render(source, base_dir);
 
@@ -50,12 +41,8 @@ fn load_document(app: &AppHandle, path: &Path) -> Result<OpenedDocument, String>
     })
 }
 
-/// Returns `MARKDOWN_EXTENSIONS` in its declared order rather than
-/// iterating `state.markdown_extensions` (a `HashSet`, so order is
-/// unspecified) — the frontend's save-as filter list feeds the native
-/// save dialog, and NSSavePanel/the Windows common dialog both append the
-/// *first* filter extension when the user types a bare filename, so a
-/// `HashSet`'s iteration order would make that default nondeterministic.
+/// Declared order, not `state.markdown_extensions` (a HashSet — unordered): NSSavePanel and the
+/// Windows common dialog both append the *first* filter extension to a bare typed filename.
 #[tauri::command]
 pub(crate) fn markdown_extensions() -> Vec<String> {
     MARKDOWN_EXTENSIONS.iter().map(|s| s.to_string()).collect()
@@ -101,17 +88,7 @@ pub(crate) fn render_markdown(
     Ok(render_and_grant(&app, &source, &base_dir))
 }
 
-/// A narrow, single-purpose command rather than `tauri-plugin-fs` — that
-/// plugin would grant the webview broad, scope-configured filesystem
-/// access, and this app renders untrusted markdown, so a command that
-/// writes exactly one extension-validated path is a materially smaller
-/// attack surface than a general-purpose fs bridge.
-///
-/// Writes to a temp file in the *same directory* as the target, then
-/// renames over it: same-directory matters because a cross-filesystem
-/// rename isn't atomic, and `std::fs::rename` replaces an existing
-/// destination on both Windows and Unix, so one code path covers both
-/// platforms without a `#[cfg]` split.
+/// The app's one filesystem write, deliberately not `tauri-plugin-fs` — see CLAUDE.md.
 #[tauri::command(async)]
 pub(crate) fn save_markdown_file(
     state: tauri::State<AppState>,
@@ -134,8 +111,7 @@ pub(crate) fn save_markdown_file_as(
     Ok(target.to_string_lossy().into_owned())
 }
 
-/// Flip once `app.js`'s `close-requested` listener is registered — see
-/// `AppState::frontend_ready`'s doc comment for why this exists.
+/// Flip once the frontend's `close-requested` listener is registered — see `AppState`'s doc comment.
 #[tauri::command]
 pub(crate) fn mark_frontend_ready(state: tauri::State<AppState>) {
     state.frontend_ready.store(true, Ordering::Relaxed);
@@ -144,12 +120,8 @@ pub(crate) fn mark_frontend_ready(state: tauri::State<AppState>) {
 pub(crate) const ZOOM_MIN: f64 = 0.5;
 pub(crate) const ZOOM_MAX: f64 = 3.0;
 
-/// `factor` round-trips through JS `localStorage` (a string) before it gets
-/// here, so this guards against corrupted/hand-edited storage the same way
-/// `js/splitter.js`'s `splitRatio` guards its own persisted number: NaN
-/// (parse failure) falls back to unzoomed rather than propagating into
-/// `Webview::set_zoom`, whose native backends aren't guaranteed to reject
-/// it gracefully.
+/// Guards against corrupted/hand-edited localStorage: NaN falls back to unzoomed rather
+/// than reaching `Webview::set_zoom`, whose native backends may not reject it gracefully.
 pub(crate) fn clamp_zoom(factor: f64) -> f64 {
     if !factor.is_finite() {
         return 1.0;
@@ -157,27 +129,15 @@ pub(crate) fn clamp_zoom(factor: f64) -> f64 {
     factor.clamp(ZOOM_MIN, ZOOM_MAX)
 }
 
-/// `tauri::Webview<R>` is a `CommandArg` (grabbed straight off the invoke
-/// message, `tauri-2.11.5/src/webview/mod.rs:2330`), so this needs no
-/// `AppHandle`/window lookup. Deliberately a custom command rather than the
-/// core plugin's `plugin:webview|set_webview_zoom`: that would need
-/// `core:webview:allow-set-webview-zoom` added to `capabilities/default.json`,
-/// widening the ACL surface a compromised webview (this app renders
-/// untrusted markdown) can reach for a single numeric setting. Same
-/// reasoning as `save_markdown_file` staying off `tauri-plugin-fs`.
+/// `tauri::Webview<R>` is a `CommandArg` (tauri-2.11.5/src/webview/mod.rs:2330), no
+/// AppHandle lookup needed. Custom command, not the core plugin's `set_webview_zoom` —
+/// same smaller-ACL reasoning as `save_markdown_file` staying off `tauri-plugin-fs`.
 #[tauri::command]
 pub(crate) fn set_zoom(webview: tauri::Webview, factor: f64) -> Result<(), String> {
     webview.set_zoom(clamp_zoom(factor)).map_err(|e| e.to_string())
 }
 
-/// The only sanctioned way this app ends itself. `AppHandle::exit` sends
-/// `Message::RequestExit`, which the runtime turns into an unprevented
-/// `RunEvent::ExitRequested` and then `ControlFlow::Exit` directly — it
-/// does not re-emit `WindowEvent::CloseRequested`, so calling this from
-/// the frontend's already-confirmed quit sequence can't loop back into
-/// the same prompt. `window.destroy()` was deliberately not used here: it
-/// would need its own capability grant, where `AppHandle::exit` needs
-/// none.
+/// The only sanctioned way this app ends itself — see CLAUDE.md's quit invariant.
 #[tauri::command]
 pub(crate) fn quit_app(app: AppHandle) {
     app.exit(0);

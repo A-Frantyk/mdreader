@@ -32,13 +32,10 @@ fn preserves_inline_markup_inside_headings() {
 fn gfm_tables_render_body_cells_and_alignment() {
     let doc = r("| a | b |\n|:---|---:|\n| 1 | 2 |\n| 3 | 4 |");
     assert!(doc.html.contains("<td"));
-    // ammonia's style filter re-serializes declarations without the
-    // space pulldown-cmark emits (`text-align:left`), so match on the
-    // property/value pair rather than exact whitespace.
+    // ammonia re-serializes style without pulldown-cmark's space ("text-align:left").
     assert!(doc.html.replace(' ', "").contains("text-align:left"), "{}", doc.html);
     assert!(doc.html.replace(' ', "").contains("text-align:right"), "{}", doc.html);
-    // Only the header row's 2 cells should be <th> ("<thead>" also
-    // matches the "<th" substring, so exclude it explicitly).
+    // "<thead>" also matches the "<th" substring — exclude it explicitly.
     let th_cells = doc.html.matches("<th").count() - doc.html.matches("<thead").count();
     assert_eq!(th_cells, 2);
     assert_eq!(doc.html.matches("<td").count(), 4);
@@ -156,10 +153,8 @@ fn resolves_relative_image_and_collects_asset() {
     assert_eq!(assets, vec![expected]);
 }
 
-// Intentional: relative destinations are NOT confined to the
-// document's directory. The mitigation lives on the frontend
-// (openWithSystem's denylist + confirm dialog) and in lib.rs's
-// Rust-side extension checks, not here.
+// Intentional: relative destinations are NOT confined to the document's directory —
+// the mitigation is at the frontend/require_markdown_path layer, not here.
 #[test]
 fn relative_links_may_escape_base_dir() {
     let (doc, _assets) = render("[up](../../outside.md)", &tdir("a/b"));
@@ -208,10 +203,7 @@ fn resolves_images_and_links_inside_headings() {
 #[test]
 fn footnote_reference_inside_heading_numbers_correctly() {
     let doc = r("First.[^a]\n\n## Section[^b]\n\n[^a]: one\n[^b]: two");
-    // [^a] must be footnote 1 and [^b] (inside the heading) must be
-    // 2 — not both "1", which a second, isolated HtmlWriter for the
-    // heading would produce. href is the raw label (`#a`/`#b`), not a
-    // synthesized id; `rel="noopener noreferrer"` is ammonia's own.
+    // [^b] (inside the heading) must be 2, not 1 — a second, isolated HtmlWriter would produce that.
     assert!(doc.html.contains("footnote-definition-label\">1</sup>"));
     assert!(doc.html.contains("footnote-definition-label\">2</sup>"));
     assert!(doc.html.contains(
@@ -235,8 +227,7 @@ fn heading_ids_cannot_break_out_of_the_attribute() {
     assert!(!doc.html.contains("onclick"));
 }
 
-// Live-preview coverage: `render()` is unchanged, but `render_markdown`
-// (lib.rs) now calls it on every debounced keystroke, so it runs
+// Live-preview coverage: render_markdown calls render() on every debounced keystroke,
 // against source states nobody would ever save.
 
 #[test]
@@ -251,15 +242,13 @@ fn empty_source_renders_an_empty_document() {
 
 #[test]
 fn nonexistent_base_dir_does_not_panic() {
-    // The untitled-document case: render_markdown falls back to
-    // current_dir(), which isn't guaranteed to exist either.
+    // The untitled-document case: render_markdown falls back to current_dir(), not guaranteed to exist.
     let doc = render_at("# Hello\n\n![x](missing.png)", "/tmp/mdreader-test-does-not-exist");
     assert!(doc.html.contains("Hello"));
 }
 
 #[test]
 fn partial_markdown_states_do_not_panic() {
-    // Every one of these is a plausible mid-keystroke buffer state.
     let partial_inputs = [
         "|a|",
         "| a | b |\n|---",
@@ -285,20 +274,15 @@ fn partial_markdown_states_do_not_panic() {
 
 #[test]
 fn unclosed_fence_still_produces_a_code_block() {
-    // Guards the "drain the parser until End(CodeBlock)" loop —
-    // an unclosed fence must not consume the rest of the document
-    // silently or panic.
+    // An unclosed fence must not consume the rest of the document silently or panic.
     let doc = r("```rust\nfn x() {}\n");
     assert!(doc.html.contains("code-block"));
 }
 
 #[test]
 fn asset_list_reflects_only_the_current_source_not_prior_calls() {
-    // render() is a pure function of its arguments — the asset list
-    // must not accumulate across calls. This is exactly what
-    // `render_and_grant`'s per-call scope-granting in lib.rs relies
-    // on: a re-render after removing an image reference should not
-    // still list that image.
+    // render() is pure — the asset list must not accumulate across calls, which is what
+    // render_and_grant's per-call scope-granting relies on.
     let dir = std::env::temp_dir().join("mdreader-test-assets");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("a.png"), b"").unwrap();
@@ -347,9 +331,7 @@ fn unknown_fence_language_falls_back_to_plain_text() {
 
 #[test]
 fn fence_info_string_uses_only_its_first_token() {
-    // A comma is not whitespace, so the whole "rust,ignore" is looked
-    // up as one syntax token (and found by neither name) — this pins
-    // the documented "first whitespace-delimited token" behavior.
+    // A comma is not whitespace, so "rust,ignore" is looked up as one token and found by neither name.
     let doc = r("```rust,ignore\nfn f() {}\n```");
     assert!(doc.html.contains("data-lang=\"rust,ignore\""), "{}", doc.html);
 
@@ -381,16 +363,9 @@ fn display_math_sets_has_math() {
 
 #[test]
 fn escaped_katex_delimiters_do_not_set_has_math() {
-    // KaTeX's auto-render also matches "\(...\)" / "\[...\]" in
-    // app.js's renderMathFor. But `(` and `)` are CommonMark-escapable
-    // punctuation, so pulldown-cmark itself consumes the backslash
-    // before this function ever sees the text — confirmed by
-    // inspecting the parser's event stream directly. The rendered
-    // HTML text nodes therefore never contain a literal backslash
-    // either, so KaTeX's own browser-side delimiter scan would fail
-    // identically. There's no gap to close here: has_math staying
-    // false for this input is consistent with what actually reaches
-    // the DOM, not a missed detection.
+    // `(`/`)` are CommonMark-escapable, so pulldown-cmark consumes the backslash before this
+    // sees the text — confirmed against the parser's event stream. The DOM never sees it either,
+    // so KaTeX's own delimiter scan fails identically: not a missed detection.
     let doc = r(r"Inline \(x\) and display \[y\] math.");
     assert!(!doc.has_math);
     assert!(!doc.html.contains('\\'), "{}", doc.html);
@@ -404,13 +379,8 @@ fn empty_link_destination_resolves_to_nothing() {
 
 #[test]
 fn absolute_image_destination_is_collected_as_is() {
-    // A destination that doesn't exist on disk forces the
-    // lexically_normalize fallback (not canonicalize), so the
-    // assertion doesn't depend on this machine's filesystem layout
-    // (e.g. macOS symlinking /etc -> /private/etc). The destination is
-    // built via abs(), not tdir() — this test's whole point is that an
-    // already-absolute path is returned unchanged rather than joined
-    // onto base_dir, so it deliberately sits outside test_base_dir().
+    // Nonexistent path forces the lexically_normalize fallback (not canonicalize), avoiding
+    // filesystem-layout dependence (e.g. macOS symlinking /etc -> /private/etc).
     let dest = abs("definitely/does/not/exist.png");
     let (doc, assets) = render(&format!("![missing]({})", dest.display()), &tdir("docs"));
     assert!(doc.html.contains(&format!("data-path=\"{}\"", dest.display())), "{}", doc.html);
@@ -427,11 +397,8 @@ fn setext_headings_get_ids_and_a_toc_entry() {
 
 #[test]
 fn tables_footnotes_and_tasklists_in_one_document_keep_writer_state() {
-    // The broadest guard for the "one push_html call" invariant: each
-    // of these features is also tested in isolation above, which is
-    // exactly what let the original writer-state-corruption bug hide
-    // — this asserts all three still behave correctly when they share
-    // one document and one HtmlWriter.
+    // Broadest guard for the one-push_html invariant: each feature is isolated above,
+    // which is exactly what let the original writer-state-corruption bug hide.
     let doc = r("| a | b | c |\n|:--|:-:|--:|\n| 1 | 2 | 3 |\n\n\
                   - [x] done\n- [ ] todo\n\n\
                   Ref one.[^a] Ref two.[^b]\n\n\
@@ -454,9 +421,8 @@ fn tables_footnotes_and_tasklists_in_one_document_keep_writer_state() {
 #[test]
 #[ignore] // run explicitly: `cargo test --release -- --ignored render_timing`
 fn render_timing_on_realistic_documents() {
-    // Dependency-free timing stand-in (no dev-dependencies exist in
-    // this crate). Run with --release; sanity-checks against the
-    // ~200ms live-preview debounce in app.js.
+    // No dev-dependencies in this crate — hence a hand-rolled timing stand-in.
+    // Run --release; sanity-checks against the ~200ms live-preview debounce.
     let fixture = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../fixtures/large.md"),
     )

@@ -1,16 +1,11 @@
-// App-wide zoom (native webview page zoom, not CSS) — persisted like theme
-// and splitRatio. See src-tauri/src/commands.rs's set_zoom for the native
-// side and CLAUDE.md's zoom invariant for why CSS zoom/transform was
-// rejected (CodeMirror measures character cells via getBoundingClientRect,
-// which a transformed ancestor breaks).
+// App-wide zoom: native webview page zoom, not CSS — see CLAUDE.md's zoom invariant.
 
 const ZOOM_KEY = "mdreader.zoom";
 const ZOOM_DEFAULT = 1;
 const ZOOM_STEPS = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3];
 
-/// Storing the factor (not a step index) means a future change to
-/// ZOOM_STEPS degrades gracefully — snap-to-nearest on read rather than an
-/// index that could point at a different value after a table edit.
+// Stores the factor, not a step index — a future ZOOM_STEPS edit degrades gracefully
+// via snap-to-nearest rather than an index pointing at a different value.
 function zoomFactor() {
   const stored = Number(localStorage.getItem(ZOOM_KEY));
   if (!Number.isFinite(stored) || stored <= 0) return ZOOM_DEFAULT;
@@ -28,10 +23,7 @@ function nearestZoomIndex(factor) {
   return index;
 }
 
-/// Applies the persisted zoom to the webview and re-measures every tab's
-/// CodeMirror instance, the same refresh() every other layout-affecting
-/// change in this codebase already does (splitter drag, split-mode entry,
-/// tab close) — page zoom changes character metrics CodeMirror caches.
+// Re-measures every tab's CodeMirror instance — page zoom changes cached character metrics.
 async function applyZoom() {
   await tauri.core.invoke("set_zoom", { factor: zoomFactor() });
   for (const tab of state.tabs) tab.editor?.refresh();

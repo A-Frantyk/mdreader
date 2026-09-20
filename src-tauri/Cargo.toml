@@ -1,6 +1,6 @@
 [package]
 name = "mdreader"
-version = "0.1.0"
+version = "0.1.1"
 description = "Lightweight cross-platform desktop Markdown viewer and editor"
 authors = ["Andrii Frantyk"]
 license = "MIT"

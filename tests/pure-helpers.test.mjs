@@ -1,5 +1,4 @@
-// Pure and near-pure app.js functions: no CodeMirror instance, no Tauri
-// IPC — just string/number logic plus (for a few) localStorage/matchMedia.
+// Pure and near-pure functions: no CodeMirror instance, no Tauri IPC.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -17,8 +16,7 @@ test("basename", async (t) => {
     assert.equal(window.basename("file.md"), "file.md");
   });
   await t.test("falls back to the whole path for a trailing slash", () => {
-    // split(/[\\/]/).pop() on "a/b/" is "" (falsy), so `|| path` returns
-    // the original, unsplit string — a real, if obscure, edge case.
+    // split(/[\\/]/).pop() on "a/b/" is "" (falsy), so `|| path` returns the original string.
     assert.equal(window.basename("a/b/"), "a/b/");
   });
 });
@@ -38,9 +36,7 @@ test("extOf", async (t) => {
     assert.equal(window.extOf("README"), "");
   });
   await t.test("strips a query string or fragment before matching", () => {
-    // Bug fix: a link like "notes.md?v=2" used to extract "md?v=2" as the
-    // extension, which matches neither markdownExtensions nor
-    // BLOCKED_OPEN_EXTENSIONS, silently misrouting the click.
+    // Bug fix: "notes.md?v=2" used to extract "md?v=2", matching neither extension list.
     assert.equal(window.extOf("notes.md?v=2"), "md");
     assert.equal(window.extOf("notes.md#section"), "md");
     assert.equal(window.extOf("Setup.EXE?download=1"), "exe");
@@ -58,9 +54,8 @@ test("isExternal", async (t) => {
     assert.ok(window.isExternal("/weird/http://embedded/path"));
   });
   await t.test("does NOT classify javascript:, data:, or protocol-relative URLs as external", () => {
-    // These fall through to the local-path branches in the content-wrap
-    // click handler instead — which is exactly why the Rust-side
-    // extension gate and openWithSystem's denylist/confirm matter.
+    // Falls through to the local-path branches instead — why the Rust-side extension
+    // gate and openWithSystem's denylist/confirm matter.
     assert.ok(!window.isExternal("javascript:alert(1)"));
     assert.ok(!window.isExternal("data:text/html,hi"));
     assert.ok(!window.isExternal("//example.com/x"));
@@ -88,19 +83,17 @@ test("editorKeyName / editorExtraKeys", async (t) => {
   await t.test("uses Cmd- on mac, Ctrl- elsewhere, with Shift outermost", () => {
     const { window } = freshApp();
     const mac = {};
-    window.CodeMirror.keyMap.default = window.CodeMirror.keyMap.macDefault; // simulate macOS
+    window.CodeMirror.keyMap.default = window.CodeMirror.keyMap.macDefault; // macOS
     assert.equal(window.editorKeyName("B"), "Cmd-B");
     assert.equal(window.editorKeyName("X", true), "Shift-Cmd-X");
 
-    window.CodeMirror.keyMap.default = mac === window.CodeMirror.keyMap.macDefault ? {} : {}; // simulate non-mac (a distinct object)
+    window.CodeMirror.keyMap.default = mac === window.CodeMirror.keyMap.macDefault ? {} : {}; // non-mac
     assert.equal(window.editorKeyName("B"), "Ctrl-B");
     assert.equal(window.editorKeyName("X", true), "Shift-Ctrl-X");
   });
 
   await t.test("every EDITOR_SHORTCUTS entry maps to a distinct key with no 'Mod-' prefix", () => {
-    // Direct regression guard for the shipped bug: shortcuts were once
-    // hand-written as "Mod-B" etc. and matched nothing, because
-    // CodeMirror never runs extraKeys through normalizeKeyMap.
+    // Regression guard — see CLAUDE.md's extraKeys invariant.
     const { app, window } = freshApp();
     window.CodeMirror.keyMap.default = window.CodeMirror.keyMap.macDefault;
     const keys = app.EDITOR_SHORTCUTS.map((s) => window.editorKeyName(s.key, s.shift));
@@ -136,8 +129,7 @@ test("splitRatio", async (t) => {
     assert.equal(window.splitRatio(), 35);
   });
   await t.test("clamps an out-of-range stored value instead of using it verbatim", () => {
-    // Bug fix: a corrupted/hand-edited value like "400" used to be
-    // returned as-is, producing `--split-ratio: 400%`.
+    // Bug fix: "400" used to be returned as-is, producing `--split-ratio: 400%`.
     const { window } = freshApp();
     window.localStorage.setItem("mdreader.splitRatio", "400");
     assert.equal(window.splitRatio(), 90);
@@ -190,8 +182,6 @@ test("untitledTitle", async (t) => {
   await t.test("reuses a gap left by a closed tab", () => {
     const { app, window } = freshApp();
     app.state.tabs.push({ title: "Untitled" }, { title: "Untitled 3" });
-    // "Untitled 2" was never taken (or was freed by a close) — the scan
-    // is a linear "first free n", not a running counter, so it reuses it.
     assert.equal(window.untitledTitle(), "Untitled 2");
   });
   await t.test("a real file named Untitled also occupies the slot", () => {
@@ -242,11 +232,8 @@ test("MARKDOWN_TOKEN_TYPES stays in sync with the vendored markdown.js", async (
       "utf8",
     );
 
-    // markdown.js's own `var tokenTypes = { key: "value", ... };` object
-    // literal — see edit-mode.js's tokenTypeOverrides invariant (CLAUDE.md)
-    // for why every key here needs an md-prefixed override: any key this
-    // app forgets to override falls through to markdown.js's own default,
-    // colliding with the generated CodeMirror code theme's classes.
+    // A forgotten key falls through to markdown.js's own default, colliding with the
+    // generated CodeMirror code theme's classes — see CLAUDE.md's two-theme-layer invariant.
     const match = markdownJs.match(/var tokenTypes = \{([\s\S]*?)\};/);
     assert.ok(match, "couldn't find markdown.js's `var tokenTypes = {...}` literal — did the vendored file change shape?");
     const keys = [...match[1].matchAll(/^\s*(\w+):/gm)].map((m) => m[1]);

@@ -1,9 +1,6 @@
 // Save/dirty-state tracking and the two save commands (in place, save-as).
 
-/// Sole owner of the 💾 button's visibility: hidden via `display: none`
-/// (see .icon-btn.is-hidden in styles.css) unless the active tab is
-/// dirty — a brand-new untitled tab or a freshly opened file both start
-/// clean, so there's nothing to save yet.
+// Sole owner of the save button's visibility — shown only when the active tab is dirty.
 function updateSaveButton() {
   const tab = state.tabs[state.activeIndex];
   const show = !!(tab && tab.dirty);
@@ -11,10 +8,8 @@ function updateSaveButton() {
   els.saveBtn.disabled = !show;
 }
 
-/// Mark `tab` dirty/clean and, only when the value actually changes,
-/// reflect it in the tab bar and the save button — a full renderTabBar()
-/// rebuild on every keystroke (dirty is recomputed on every CodeMirror
-/// `change` event) would be wasteful once it's already showing the dot.
+// Only reflects a change when the value actually flips — renderTabBar() on every
+// CodeMirror `change` event would be wasteful once the dot is already showing.
 function markDirty(tab, dirty) {
   if (tab.dirty === dirty) return;
   tab.dirty = dirty;
@@ -25,23 +20,15 @@ function markDirty(tab, dirty) {
   }
 }
 
-/// document.title is otherwise never touched — Tauri doesn't sync it to
-/// the native window title bar on its own — so this is the one place
-/// that keeps it in sync with the active tab and its dirty state.
+// Tauri doesn't sync document.title to the native title bar on its own.
 function updateDocumentTitle() {
   const tab = state.tabs[state.activeIndex];
   document.title = tab ? `${tab.dirty ? "● " : ""}${tab.title} — mdreader` : "mdreader";
 }
 
-/// Writes the active editor buffer to disk via `save_markdown_file`. On
-/// failure the buffer, dirty flag, and undo history are all left
-/// untouched — a failed save must never look like a successful one.
-///
-/// Returns whether `tab` is clean once this settles — the tab-close and
-/// quit flows (confirmClosable, requestQuit) need to know whether a
-/// user-chosen "Save" actually succeeded before they proceed with closing
-/// anything, since a failed save or a cancelled save-as picker must abort
-/// the close, not silently discard the edit.
+// On failure the buffer, dirty flag, and undo history are left untouched. Returns
+// whether `tab` ends up clean — confirmClosable/requestQuit need that to know
+// whether to abort a close on a failed or cancelled save.
 async function saveTab(tab) {
   if (!tab || !tab.editor || !tab.dirty || tab.saving) return !tab?.dirty;
   if (!tab.path) return saveTabAs(tab);
@@ -66,9 +53,7 @@ async function saveTab(tab) {
   }
 }
 
-/// The save path for a tab that's never been saved before (`tab.path ===
-/// null`). `save_markdown_file_as` appends a `.md` extension if the user
-/// typed a bare name — path resolution stays in Rust, see CLAUDE.md.
+// The save path for a tab never saved before (tab.path === null).
 async function saveTabAs(tab) {
   if (tab.saving) return false;
   tab.saving = true;
@@ -80,9 +65,8 @@ async function saveTabAs(tab) {
     });
     if (!picked) return false;
 
-    // Refuse rather than silently shadowing or closing the other tab —
-    // there's no data-loss-free way to resolve two tabs claiming the same
-    // path.
+    // Refuse rather than shadowing or closing the other tab — no data-loss-free
+    // way to resolve two tabs claiming the same path.
     if (state.tabs.some((t) => t !== tab && t.path === picked)) {
       await tauri.dialog
         .message(`"${basename(picked)}" is already open in another tab.`, {
@@ -99,8 +83,7 @@ async function saveTabAs(tab) {
     tab.title = basename(finalPath);
     tab.savedSource = contents;
     markDirty(tab, false);
-    // Relative image/link resolution just moved from the cwd fallback
-    // (see render_markdown's base_path doc comment in lib.rs) to this
+    // Relative image/link resolution just moved from the cwd fallback to this
     // tab's real directory — the preview must re-render to pick that up.
     schedulePreview(tab);
     return true;

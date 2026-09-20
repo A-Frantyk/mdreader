@@ -1,10 +1,6 @@
-// The security-critical suite: everything between "user clicked something
-// in a rendered document" and "a native OS action actually happened."
-// render.rs resolves every link/image destination to an absolute
-// filesystem path before the frontend ever sees it (see CLAUDE.md's path
-// invariant) — app.js's job is only to classify that resolved string and
-// route it, and to make sure `opener.openPath` is never reachable except
-// through openWithSystem's denylist + confirmation.
+// The security-critical suite: everything between "user clicked something in a
+// rendered document" and "a native OS action actually happened." See CLAUDE.md's
+// path-resolution invariant — the frontend only classifies an already-resolved string.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { freshApp } from "./harness.mjs";
@@ -60,8 +56,7 @@ test("#content-wrap click routing", async (t) => {
     window.document.getElementById("content-wrap").appendChild(link);
     click(link);
 
-    // openUrl is awaited inside a .catch chain, not directly by the
-    // handler — give the microtask queue a tick to settle.
+    // openUrl is awaited inside a .catch chain — give the microtask queue a tick to settle.
     await Promise.resolve();
     assert.equal(openUrlCalledWith, "https://example.com/page");
     assert.equal(openPathCalled, false);
@@ -81,10 +76,7 @@ test("#content-wrap click routing", async (t) => {
       openWithSystemCalled = true;
     };
 
-    // Local links carry data-path, not href — render.rs never puts a
-    // resolved filesystem path in href= (see CLAUDE.md's path-resolution
-    // invariant: ammonia would apply URL rules to it and, on Windows,
-    // silently drop it as an unrecognized "c" scheme).
+    // Local links carry data-path, not href — see CLAUDE.md's path-resolution invariant.
     const link = window.document.createElement("a");
     link.dataset.path = "/resolved/absolute/other.md";
     window.document.getElementById("content-wrap").appendChild(link);
@@ -118,12 +110,8 @@ test("#content-wrap click routing", async (t) => {
   });
 
   await t.test("a Windows-style resolved path round-trips untouched", () => {
-    // The regression this whole data-path channel exists for: render.rs
-    // resolves a Windows destination to something like C:\Users\a\pic.md.
-    // That value must reach openPaths/openWithSystem byte-for-byte — no
-    // separator rewriting, no URL parsing — the same way it would on any
-    // other platform. This is provable on macOS because app.js never
-    // interprets the string, only reads the attribute.
+    // The regression this data-path channel exists for: a Windows destination like
+    // C:\Users\a\pic.md must reach openPaths/openWithSystem byte-for-byte, no rewriting.
     const { window } = freshApp();
     window.__testExports.markdownExtensions = new Set(["md"]);
     makeActiveTab({ window, app: window.__testExports });
@@ -210,9 +198,7 @@ test("rewriteImageSources", async (t) => {
   });
 
   await t.test("a Windows-style resolved path round-trips untouched into convertFileSrc", () => {
-    // Same regression coverage as the click-routing suite above: render.rs
-    // resolves a Windows destination to something like C:\Users\a\pic.png,
-    // and that value must reach convertFileSrc byte-for-byte.
+    // Same regression coverage as the click-routing suite above, for image paths.
     const { window, tauri } = freshApp();
     const root = window.document.createElement("div");
     root.innerHTML = '<img data-path="C:\\Users\\a\\pic.png">';
@@ -221,8 +207,7 @@ test("rewriteImageSources", async (t) => {
   });
 
   await t.test("leaves a data: URL untouched", () => {
-    // A remote/data-URI image never gets a data-path from render.rs — no
-    // attribute to select, so rewriteImageSources never touches it.
+    // A remote/data-URI image never gets a data-path — nothing to select.
     const { window } = freshApp();
     const root = window.document.createElement("div");
     root.innerHTML = '<img src="data:image/png;base64,AAAA">';

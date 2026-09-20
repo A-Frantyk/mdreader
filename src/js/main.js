@@ -46,8 +46,7 @@ function wireStaticUI() {
   document.addEventListener("keydown", (e) => {
     if (e.isComposing) return; // IME composition — not a real shortcut keystroke
 
-    // Same reasoning as the modalOpen block below: no native focus trap,
-    // and a native menu press isn't blocked by a DOM backdrop at all.
+    // No native focus trap, and a native menu press isn't blocked by a DOM backdrop —
     // About only has one button, so just Escape.
     if (aboutOpen) {
       if (e.key === "Escape") {
@@ -57,10 +56,8 @@ function wireStaticUI() {
       return;
     }
 
-    // The modal has no native focus trap (it's plain DOM, not <dialog>),
-    // and a native menu press isn't blocked by a DOM backdrop at all (see
-    // the "menu-action" listener in init) — so every other shortcut below
-    // must be unreachable while it's open, not just visually obscured.
+    // Plain DOM, not <dialog> — no native focus trap, so every shortcut below must be
+    // unreachable while it's open, not just visually obscured.
     if (modalOpen) {
       if (e.key === "Escape") {
         e.preventDefault();
@@ -91,34 +88,22 @@ function wireStaticUI() {
       e.preventDefault();
       saveTab(state.tabs[state.activeIndex]);
     } else if (mod && e.key === "+") {
-      // Cmd/Ctrl+Equal and Cmd/Ctrl+Minus are native menu accelerators
-      // (menu.rs's ZOOM_IN/ZOOM_OUT), not handled here — this branch only
-      // covers the *shifted* "+" (Cmd+Shift+Equal on most layouts) and a
-      // numpad Add key, neither of which the menu accelerator's exact
-      // modifier match fires for. Disjoint by construction: nothing here
-      // can double-fire against a menu press.
+      // The unshifted "=" is a native menu accelerator (menu.rs's ZOOM_IN) — this only
+      // covers the shifted "+" and numpad Add, disjoint from the menu's exact modifier match.
       e.preventDefault();
       stepZoom(1);
     } else if (mod && e.code === "NumpadSubtract") {
-      // NumpadSubtract's e.key is "-", identical to the main-row Minus key
-      // the menu accelerator already owns — checked by e.code, not e.key,
-      // so the two can't collide.
+      // e.code, not e.key ("-", same as the menu-owned Minus key) — so the two can't collide.
       e.preventDefault();
       stepZoom(-1);
     }
-    // No branches for New/Open/Quit here, deliberately — those are
-    // menu-only (see the "menu-action" listener in init). A double-fired
-    // New would create two tabs, the one non-idempotent action in this
-    // app, so it gets exactly one trigger path instead of two racing
-    // ones.
+    // No New/Open/Quit here — those are menu-only. A double-fired New would create two
+    // tabs, so it gets exactly one trigger path.
   });
 
-  // Ctrl+wheel is also how a macOS trackpad pinch arrives (as a wheel
-  // event with ctrlKey set, not a gesture event) — metaKey is deliberately
-  // ignored, since Cmd+scroll isn't a zoom convention anywhere. Accumulates
-  // deltas rather than stepping per-event: a trackpad fires many small
-  // events per gesture, and deltaMode 1 ("lines") is normalized to pixels
-  // first so the threshold means the same thing on either input device.
+  // A macOS trackpad pinch arrives as a wheel event with ctrlKey set, not a gesture
+  // event. Accumulates deltas (a trackpad fires many small events per gesture);
+  // deltaMode 1 ("lines") is normalized to pixels first.
   let wheelZoomAccum = 0;
   window.addEventListener(
     "wheel",
@@ -154,10 +139,8 @@ async function wireDragDrop() {
   });
 }
 
-/// Dispatches a native menu click (src-tauri/src/menu.rs) to the same
-/// actions their toolbar/keyboard equivalents use. Guarded like the
-/// global keydown handler: a native menu press isn't blocked by the
-/// modal's DOM backdrop at all.
+// Guarded like the global keydown handler — a native menu press isn't blocked by the
+// modal's DOM backdrop at all.
 function handleMenuAction(id) {
   if (modalOpen || aboutOpen) return;
   switch (id) {
@@ -190,9 +173,7 @@ function handleMenuAction(id) {
 
 async function init() {
   await applyTheme(); // as early as possible, before anything else paints
-  // Unconditional, including at the default factor: the webview keeps its
-  // zoom level across a dev reload, so skipping this at factor 1 would
-  // leave a stale zoom from a previous session's reload stuck in place.
+  // Unconditional even at the default factor — the webview keeps its zoom across a dev reload.
   await applyZoom();
   wireStaticUI();
 
@@ -201,22 +182,13 @@ async function init() {
 
   markdownExtensions = new Set(await tauri.core.invoke("markdown_extensions"));
 
-  // Entry paths 1 & 2 (Windows/Linux argv, macOS RunEvent::Opened) may
-  // have queued files before this ran. Entry path 3 (already-running
-  // instance) arrives as a later "files-pending" hint — the queue is the
-  // payload, the event is just a nudge to go drain it again.
+  // Files may already be queued — see CLAUDE.md's file-open-events invariant.
   await drainAndOpen();
   await tauri.event.listen("files-pending", () => drainAndOpen());
   await tauri.event.listen("menu-action", ({ payload }) => handleMenuAction(payload));
-  // Rust's CloseRequested handler prevents the close and emits this
-  // instead — see lib.rs's on_window_event.
   await tauri.event.listen("close-requested", () => requestQuit());
 
-  // Only after both listeners above are registered: emitting
-  // "close-requested" any earlier would have nothing listening for it and
-  // the event would simply be lost (Tauri doesn't replay events) — the
-  // same failure mode as the files-pending queue this mirrors. See
-  // AppState::frontend_ready's doc comment in lib.rs.
+  // Only after every listener above is registered — see AppState's doc comment in lib.rs.
   await tauri.core.invoke("mark_frontend_ready");
 
   try {

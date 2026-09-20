@@ -1,6 +1,5 @@
-//! Turning `Tag::Link`/`Tag::Image` parser events into resolved
-//! `<a data-path>`/`<img data-path>` HTML — see render.rs's module doc for
-//! why a local destination bypasses `href=`/`src=` entirely.
+//! Turning `Tag::Link`/`Tag::Image` parser events into resolved `<a data-path>`/
+//! `<img data-path>` HTML — see CLAUDE.md's path-resolution invariant for why.
 
 use std::path::{Path, PathBuf};
 
@@ -9,9 +8,7 @@ use pulldown_cmark_escape::escape_html as escape_into;
 
 use super::paths::resolve_local;
 
-/// Appends ` name="escaped(value)"` to `html` — the one shape both
-/// `resolve_event`'s `<a>` and `resolve_image_event`'s `<img>` builders need
-/// repeatedly (`data-path`, `alt`, `title`).
+/// Appends ` name="escaped(value)"` to `html` — shared by the `<a>` and `<img>` builders below.
 fn push_attr(html: &mut String, name: &str, value: &str) {
     html.push(' ');
     html.push_str(name);
@@ -20,17 +17,8 @@ fn push_attr(html: &mut String, name: &str, value: &str) {
     html.push('"');
 }
 
-// Local link/image destinations deliberately do NOT flow into `href=`/`src=`
-// — see the "Path resolution stays in Rust" invariant in CLAUDE.md. Ammonia
-// applies URL semantics to those attributes, and a resolved Windows path
-// (`C:\Users\...`) parses as URL scheme `c`, which isn't in ammonia's scheme
-// allowlist — the whole attribute is silently dropped. `data-path` isn't
-// URL-typed, so ammonia (with the tag_attributes allowlist below) passes it
-// through byte-for-byte on every platform. resolve_local already returns
-// None for anything external/anchored/scheme'd, so those keep flowing
-// through pulldown-cmark's normal `href=`/`src=` output untouched.
-/// Handles `Tag::Link` only — `Tag::Image` needs its alt text drained too
-/// (see `resolve_image_event`), which an `Event -> Event` shape can't do.
+/// Handles `Tag::Link` only — `Tag::Image` needs its alt text drained too, which an
+/// `Event -> Event` shape can't do. `data-path`, not `href`: see CLAUDE.md.
 pub(super) fn resolve_event<'a>(event: Event<'a>, base_dir: &Path) -> Event<'a> {
     match event {
         Event::Start(Tag::Link { link_type, dest_url, title, id }) => {
@@ -38,11 +26,7 @@ pub(super) fn resolve_event<'a>(event: Event<'a>, base_dir: &Path) -> Event<'a> 
                 Some(path) => {
                     let mut html = String::from("<a");
                     push_attr(&mut html, "data-path", &path.to_string_lossy());
-                    // role/tabindex restore what a plain `<a href>` gets for
-                    // free — keyboard focus and a pointer cursor — since an
-                    // <a> with no href is otherwise inert to both. See
-                    // app.js's contentWrap keydown handler for the Enter/
-                    // Space side of this.
+                    // Restores what a plain `<a href>` gets for free: focus and a pointer cursor.
                     html.push_str(" role=\"link\" tabindex=\"0\"");
                     if !title.is_empty() {
                         push_attr(&mut html, "title", &title);
@@ -57,13 +41,8 @@ pub(super) fn resolve_event<'a>(event: Event<'a>, base_dir: &Path) -> Event<'a> 
     }
 }
 
-/// Resolves a `Tag::Image` Start event — shared by the top-level match and
-/// the heading-inner-event loop so there's exactly one place this logic
-/// lives, same reasoning as `resolve_event`. A local destination is fully
-/// built here (see `resolve_local_image`); anything else is re-emitted
-/// unchanged, and its alt-text/End events are left for the caller's own
-/// loop to pick up on its next iteration, same as before this function
-/// existed.
+/// Shared by the top-level match and the heading-inner-event loop, so this logic
+/// lives in exactly one place. A non-local destination is re-emitted unchanged.
 pub(super) fn resolve_image_event<'a>(
     tag: Tag<'a>,
     base_dir: &Path,
@@ -79,22 +58,11 @@ pub(super) fn resolve_image_event<'a>(
     }
 }
 
-/// Builds a complete `<img>` tag for a local (resolved) image destination
-/// and returns it alongside the raw, unescaped alt text — a caller inside a
-/// heading folds that into the heading's own plain-text accumulator (slug +
-/// TOC text), matching how alt text nested in a heading already contributed
-/// via the generic Text/Code accumulation before this function existed.
-///
-/// Drains `parser` to the matching `TagEnd::Image` itself, mirroring
-/// pulldown_cmark::html::HtmlWriter::raw_text's event handling — a local
-/// image bypasses the writer's own `Tag::Image` handling entirely (see
-/// resolve_event's comment above for why `data-path` replaces `src`).
-/// Deliberately not reproduced: FootnoteReference numbering inside alt text
-/// (needs the writer's private counter, out of reach here) and the
-/// TaskListMarker/InlineMath/DisplayMath variants (none occur in practice
-/// inside `![alt](...)`). Footnote numbering everywhere else in the
-/// document is unaffected — it still goes through the single shared
-/// push_html call at the end of render().
+/// Builds a complete `<img>` tag plus the raw alt text, for a caller inside a heading
+/// to fold into its own slug/TOC accumulator. Drains `parser` to `TagEnd::Image`,
+/// mirroring `pulldown_cmark::html::HtmlWriter::raw_text` — deliberately not reproduced:
+/// footnote numbering inside alt text (needs the writer's private counter) and the
+/// TaskListMarker/InlineMath/DisplayMath variants (none occur inside `![alt](...)`).
 fn resolve_local_image<'a>(
     title: &str,
     parser: &mut Parser<'a>,

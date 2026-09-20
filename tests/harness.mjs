@@ -1,22 +1,10 @@
-// Loads the real src/js/*.js scripts into a jsdom window without changing a
-// byte of them, so the test suites exercise the actual production files
-// rather than a copy or a refactored/exported variant. The frontend is a
-// series of classic scripts with no exports, sharing one global lexical
-// scope by design (see CLAUDE.md's "classic scripts, not ES modules"
-// invariant) — every top-level `function` declaration lands on `window` for
-// free, but top-level `const`/`let` bindings (state, els, EDITOR_SHORTCUTS,
-// ...) do not, so an epilogue appended to the *same* concatenated script
-// text exposes exactly the ones the suites need, by reference, onto
-// `window.__testExports`.
-//
-// Which files load, and in what order, is read from src/index.html itself
-// (its <script src="js/...">  tags) rather than hardcoded here, so a future
-// re-split doesn't need a matching harness edit. The only thing ever
-// removed from the concatenated source is the trailing bare `init();` call
-// — everything else, including every function body, runs unmodified.
-// Removing it is what keeps a fresh jsdom window from firing the whole
-// Tauri IPC bootstrap (markdown_extensions, drainAndOpen, three
-// event.listen calls, mark_frontend_ready, wireDragDrop) on every test.
+// Loads the real src/js/*.js scripts into a jsdom window unmodified, so tests exercise
+// the actual production files. Top-level `function`s land on `window` for free (classic
+// scripts, one global scope — see CLAUDE.md); top-level `const`/`let` don't, so an
+// epilogue exposes the ones tests need onto `window.__testExports`. Script list and
+// order come from src/index.html's own <script> tags, not a hardcoded list. The only
+// thing ever stripped from the concatenated source is the trailing `init();` call —
+// removing it is what keeps a fresh jsdom window from firing the Tauri IPC bootstrap.
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -28,9 +16,8 @@ const REPO_ROOT = path.join(__dirname, "..");
 
 const RAW_INDEX_HTML = readFileSync(path.join(REPO_ROOT, "src/index.html"), "utf8");
 
-// Every <script src="..."> tag in document order — jsdom's resource loader
-// would try to fetch these as local files, so each real tag is stripped and
-// its source concatenated in as one inline <script> below instead.
+// jsdom's resource loader would try to fetch these as local files — stripped and
+// concatenated in as one inline <script> below instead.
 const SCRIPT_TAG_RE = /<script src="([^"]+)"><\/script>\s*/g;
 const scriptSrcs = [...RAW_INDEX_HTML.matchAll(SCRIPT_TAG_RE)].map((m) => m[1]);
 const INDEX_HTML = RAW_INDEX_HTML.replace(SCRIPT_TAG_RE, "");
@@ -49,13 +36,10 @@ if (!TRAILING_INIT_CALL.test(APP_JS_SOURCE)) {
 }
 const APP_JS_BODY = APP_JS_SOURCE.replace(TRAILING_INIT_CALL, "\n");
 
-// Everything app.js declares with `const`/`let` at the top level that a
-// suite needs to read or seed. Exposed as live getters/setters (not a
-// one-time copy) for the primitive `let`s that app.js's own functions
-// reassign during a test (markdownExtensions, modalOpen, quitting,
-// newDocInFlight) — a plain property copy here would go stale the moment
-// internal code did `markdownExtensions = new Set(...)`. `aboutOpen` is
-// included for the same reason as `modalOpen`.
+// Top-level const/let a suite needs to read or seed. Exposed as getters (setters where
+// a test also needs to seed the value) for the primitive `let`s the frontend reassigns
+// during a test — a plain property copy would go stale the moment internal code did
+// `markdownExtensions = new Set(...)`.
 const EPILOGUE = `
 window.__testExports = {
   els, state, inFlight, find, darkQuery,
@@ -73,10 +57,7 @@ window.__testExports = {
 };
 `;
 
-// A condensed CSS.escape polyfill (CSSOM spec algorithm) — jsdom doesn't
-// implement CSS.escape itself, and app.js's TOC/click-routing/find code
-// uses it to build an #id selector from a (possibly non-CSS-safe) heading
-// slug or find-in-page anchor.
+// jsdom doesn't implement CSS.escape (CSSOM spec algorithm) itself.
 function cssEscape(value) {
   const string = String(value);
   const length = string.length;
@@ -147,19 +128,14 @@ function defaultTauriStub() {
   };
 }
 
-/// Builds one fresh window + evaluates the frontend's scripts into it.
-/// Every test that touches module-level state (state.tabs,
-/// find.currentIndex, the loader memos, localStorage, ...) must call this
-/// itself rather than share a window with another test — nothing in the
-/// frontend resets that state on its own, by design (see CLAUDE.md's
-/// tab-lifetime notes).
+// Every test touching module-level state must call this itself rather than share a
+// window — nothing in the frontend resets that state on its own.
 export function freshApp() {
   const dom = new JSDOM(INDEX_HTML, { url: "http://localhost/", runScripts: "dangerously" });
   const { window } = dom;
 
-  // --- stubs for browser APIs jsdom doesn't implement, installed BEFORE
-  // the frontend's scripts evaluate (js/theme.js's top-level code reads
-  // matchMedia and js/dom.js builds `els` synchronously at eval time). ---
+  // Stubs for browser APIs jsdom doesn't implement, installed BEFORE the frontend's
+  // scripts evaluate — top-level code reads some of these synchronously at eval time.
   window.CSS = window.CSS || {};
   window.CSS.escape = cssEscape;
 
@@ -184,14 +160,11 @@ export function freshApp() {
   window.requestAnimationFrame = (cb) => setTimeout(() => cb(Date.now()), 0);
   window.cancelAnimationFrame = (id) => clearTimeout(id);
 
-  // jsdom does no layout, so this is never meaningfully exercised (see
-  // attachSplitterDrag's early-return on a zero-width rect) — stubbed only
-  // so code paths that *call* it (find, TOC, anchor clicks) don't throw.
+  // jsdom does no layout — stubbed only so callers (find, TOC, anchor clicks) don't throw.
   window.Element.prototype.scrollIntoView = function () {};
 
-  // Minimal enough for editorKeyName's mac-detection check
-  // (`CM.keyMap.default === CM.keyMap.macDefault`) — tests flip
-  // `window.CodeMirror.keyMap.default` to one or the other sentinel.
+  // Minimal enough for editorKeyName's mac-detection check — tests flip
+  // window.CodeMirror.keyMap.default to one sentinel or the other.
   window.CodeMirror = {
     keyMap: { default: {}, macDefault: {} },
   };
@@ -206,16 +179,9 @@ export function freshApp() {
   return { window, document: window.document, tauri, app: window.__testExports };
 }
 
-// --- fakeCm: a minimal but real line-buffer CodeMirror 5 stand-in -------
-//
-// Implements exactly the methods the editor-command functions call
-// (getCursor/getRange/getLine/getValue/lastLine/replaceRange/setSelection/
-// setCursor/operation/focus), including CodeMirror's own clamping
-// behavior: getRange silently clamps an out-of-bounds `ch` to the line's
-// actual length rather than throwing. wrapSelection's "markers sit just
-// outside the selection" branch depends on exactly that (see its comment
-// in js/editor-commands.js) — a fake that throws on an out-of-range probe
-// would make that branch untestable, not just untested.
+// A minimal but real line-buffer CodeMirror 5 stand-in — replicates getRange's
+// clamping of an out-of-bounds `ch` rather than throwing, since wrapSelection's
+// "markers sit just outside the selection" branch depends on exactly that.
 
 function clampPos(lines, pos) {
   const line = Math.min(Math.max(pos.line, 0), lines.length - 1);

@@ -17,9 +17,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
-# Only for build.rs's theme CSS generation — no default-syntaxes/dump-create needed.
-# No "default-themes": build.rs builds its own syntect Theme from the vendored
-# One Dark Pro / One Light VS Code JSON in themes/, not from syntect's bundled set.
+# build.rs builds its own syntect Theme from the vendored VS Code JSON, not syntect's bundled set.
 syntect = { version = "5", default-features = false, features = ["html", "regex-fancy"] }
 # Build-only, for build.rs's generate_markdown_extensions and its VS Code theme loader.
 serde_json = "1"

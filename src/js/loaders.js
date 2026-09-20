@@ -19,10 +19,7 @@ function mermaidConfig() {
 
 function ensureMermaid() {
   if (!mermaidLoadPromise) {
-    // Null the memo out on failure so a transient error (e.g. the app
-    // briefly offline from a network drive) doesn't permanently wedge
-    // mermaid rendering for the rest of the session — the next call
-    // gets a fresh attempt instead of the same rejected promise forever.
+    // Null the memo on failure so a transient error doesn't wedge the rest of the session.
     mermaidLoadPromise = loadScript("vendor/mermaid/mermaid.min.js").catch((err) => {
       mermaidLoadPromise = null;
       throw err;
@@ -31,11 +28,8 @@ function ensureMermaid() {
   return mermaidLoadPromise;
 }
 
-/// Renders (or, with `restore: true`, re-renders from pristine source —
-/// used when the user toggles the theme) every mermaid fence in `tab`.
-/// Must only be called while `tab.contentEl` is visible: mermaid measures
-/// text via the DOM, which returns nothing useful for a `display: none`
-/// subtree.
+// Must only be called while tab.contentEl is visible — mermaid measures text via the
+// DOM, which returns nothing useful for a display:none subtree.
 async function renderMermaidFor(tab, { restore = false } = {}) {
   await ensureMermaid();
   window.mermaid.initialize(mermaidConfig());
@@ -90,16 +84,8 @@ async function renderMathFor(root) {
   }
 }
 
-// CodeMirror is vendored (src/vendor/codemirror/) and loaded lazily via
-// the same memoized-promise pattern as Mermaid/KaTeX above, so a pure
-// viewing session never fetches it — see ensureCodeMirror.
 let codeMirrorLoadPromise = null;
-
-// Kept as a module-level reference (like els.codeThemeLink), created
-// lazily inside ensureCodeMirror, so applyTheme can flip its href on a
-// theme change once edit mode has been entered — see enterSplitMode's
-// `theme:` value for the two-stylesheet split this points at.
-let cmSyntaxThemeLink = null;
+let cmSyntaxThemeLink = null; // set inside ensureCodeMirror, so applyTheme can flip its href
 
 function ensureCodeMirror() {
   if (!codeMirrorLoadPromise) {
@@ -117,25 +103,13 @@ function ensureCodeMirror() {
     codeMirrorLoadPromise = loadScript("vendor/codemirror/lib/codemirror.js")
       .then(() => loadScript("vendor/codemirror/mode/markdown/markdown.js"))
       .then(() => loadScript("vendor/codemirror/mode/gfm/gfm.js"))
-      // "gfm" is markdown with a small overlay mode layered on top —
-      // CodeMirror.overlayMode is not part of core codemirror.js, it's
-      // this addon. Without it, gfm.js's mode factory throws
-      // "CodeMirror.overlayMode is not a function" the moment a "gfm"
-      // editor is actually constructed (mode resolution happens lazily,
-      // at `new CodeMirror(...)` time, not when gfm.js itself loads) —
-      // which built the editor's empty DOM shell first, so the visible
-      // symptom was a blank editor pane, not an obvious load error.
+      // gfm.js needs CodeMirror.overlayMode (this addon, not core) — without it, its mode
+      // factory throws only once a "gfm" editor is constructed, so the symptom is a blank
+      // editor pane at that later point, not a load error here.
       .then(() => loadScript("vendor/codemirror/addon/mode/overlay.js"))
-      // Fence-language highlighting: markdown.js's fencedCodeBlockHighlighting
-      // defaults to true already, but it resolves a fence's language via
-      // CodeMirror.findModeByName — defined by meta.js, not core — so
-      // without meta.js and the actual per-language modes, fences stay
-      // plain monospace no matter what the mode config says. Order below
-      // respects each file's own declared dependencies (checked directly
-      // against each file's UMD header, not assumed): rust.js needs
-      // addon/mode/simple.js loaded first; htmlmixed.js needs xml.js,
-      // javascript.js, and css.js loaded first — both satisfied by this
-      // sequence.
+      // Fence highlighting needs CodeMirror.findModeByName (meta.js) plus the per-language
+      // modes below, in each file's own declared dependency order (checked against each
+      // UMD header): rust.js needs simple.js first; htmlmixed.js needs xml/javascript/css first.
       .then(() => loadScript("vendor/codemirror/mode/meta.js"))
       .then(() => loadScript("vendor/codemirror/addon/mode/simple.js"))
       .then(() => loadScript("vendor/codemirror/mode/javascript/javascript.js"))

@@ -1,16 +1,9 @@
 #!/bin/sh
-# Downloads the latest mdreader macOS release, verifies its checksum,
-# installs it to /Applications, and strips the quarantine attribute so
-# it launches with no Gatekeeper prompt.
-#
-# The app is ad-hoc signed, not notarized (no paid Apple Developer
-# Program membership — see CLAUDE.md's signing invariant), so macOS
-# would otherwise show "Apple could not verify ... is free of malware"
-# on first launch. Read this script before running it: it never uses
-# sudo and never disables Gatekeeper system-wide (no
-# `spctl --master-disable`) — it only clears com.apple.quarantine on
-# the one app bundle it just installed, which is what removes the
-# per-download quarantine flag that triggers the assessment.
+# Downloads the latest mdreader macOS release, verifies its checksum, installs it to
+# /Applications, and strips the quarantine attribute so it launches with no Gatekeeper
+# prompt (ad-hoc signed, not notarized — see CLAUDE.md's signing invariant). Never uses
+# sudo and never disables Gatekeeper system-wide — only clears com.apple.quarantine on
+# the one app bundle it just installed. Read it before running it.
 #
 # Usage:
 #   curl -fsSL -o install-macos.sh https://raw.githubusercontent.com/A-Frantyk/mdreader/main/scripts/install-macos.sh

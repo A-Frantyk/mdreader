@@ -1,6 +1,5 @@
 //! Resolving relative link/image destinations to absolute filesystem paths.
-//! See render.rs's module doc for why this lives in Rust and why the
-//! result is emitted as `data-path`, never `src`/`href`.
+//! See CLAUDE.md's path-resolution invariant for why this lives in Rust.
 
 use std::path::{Path, PathBuf};
 

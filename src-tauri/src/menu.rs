@@ -1,22 +1,6 @@
-//! The app's native menu bar. Hand-built rather than `tauri::menu::Menu::default()`,
-//! for two reasons verified against the `tauri`/`muda` crate sources:
-//!
-//! - `Menu::default()`'s File submenu doesn't exist on Linux at all, and
-//!   this app needs New/Open/Save on every desktop platform.
-//! - `Menu::default()`'s File and Window submenus both carry
-//!   `PredefinedMenuItem::close_window`, which `muda` gives the Cmd+W
-//!   accelerator on macOS. AppKit resolves menu key equivalents before the
-//!   webview ever sees the keystroke, so that item would hijack this app's
-//!   own Cmd+W "close the active tab" behavior (wired in `app.js`'s global
-//!   keydown handler) and close the whole window instead. `close_window` is
-//!   deliberately omitted from every submenu below — don't add it back.
-//!
-//! Quit is a **custom** menu item, not `PredefinedMenuItem::quit`: muda's
-//! macOS predefined Quit sends `terminate:` directly to `NSApp`, which has
-//! no interceptable `RunEvent` at all, bypassing the unsaved-changes quit
-//! sequence entirely. The custom item instead routes through `handle` below
-//! like every other menu action, into the same `menu-action` event the
-//! frontend already listens for.
+//! The app's native menu bar, hand-built rather than `tauri::menu::Menu::default()` —
+//! see CLAUDE.md's menu invariants for why (`close_window`'s Cmd+W hijack, Quit's
+//! `terminate:` bypass). Never add `PredefinedMenuItem::close_window` or `::quit` back.
 
 #[cfg(not(target_os = "macos"))]
 use tauri::menu::HELP_SUBMENU_ID;
@@ -55,11 +39,8 @@ pub fn build<R: Runtime>(handle: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         ],
     )?;
 
-    // Undo/redo/clipboard are the real behavior CodeMirror needs from an
-    // Edit menu; reproduced by hand here because a custom app-wide menu
-    // replaces Tauri's auto-installed macOS default wholesale, not just
-    // supplements it — losing these would break Copy/Paste/Undo/Select-All
-    // inside the editor.
+    // A custom menu replaces Tauri's auto-installed macOS default wholesale, not
+    // supplements it — omitting these would break Copy/Paste/Undo inside the editor.
     let edit_menu = Submenu::with_items(
         handle,
         "Edit",
@@ -75,14 +56,8 @@ pub fn build<R: Runtime>(handle: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         ],
     )?;
 
-    // Zoom items are plain custom `MenuItem`s, not `PredefinedMenuItem`s, so
-    // — unlike Minimize/Fullscreen/Quit below — muda doesn't silently drop
-    // them on Linux; the View menu is therefore built on every platform.
-    // Fullscreen is the one item still macOS-only, for that reason.
-    // "Actual Size" carries no accelerator: `CmdOrCtrl+0` is already
-    // `js/editor-commands.js`'s "clear heading" binding, and a macOS menu
-    // key equivalent is resolved by AppKit before the webview ever sees the
-    // keystroke, which would silently kill that editor shortcut.
+    // Custom MenuItems, not PredefinedMenuItems, so muda doesn't drop them on Linux like
+    // Fullscreen below. "Actual Size" has no accelerator — see CLAUDE.md's zoom invariant.
     let view_menu = Submenu::with_items(
         handle,
         "View",
@@ -98,10 +73,7 @@ pub fn build<R: Runtime>(handle: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         ],
     )?;
 
-    // Window submenu carries only Minimize (no close_window, see the
-    // module doc). macOS-only: on Linux muda drops unsupported predefined
-    // items (including Minimize) silently, which would otherwise render as
-    // an empty "Window" menu.
+    // macOS-only: on Linux muda silently drops Minimize, which would render an empty menu.
     #[cfg(target_os = "macos")]
     let window_menu = Submenu::with_id_and_items(
         handle,

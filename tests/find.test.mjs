@@ -1,7 +1,4 @@
-// Find-in-document: a hand-rolled TreeWalker-based highlighter (no
-// selection API, no browser find-in-page) — runFind/clearMarks/stepMatch
-// are the whole implementation and were completely unexercised before
-// this suite.
+// Find-in-document: a hand-rolled TreeWalker-based highlighter (no browser find-in-page).
 import test from "node:test";
 import assert from "node:assert/strict";
 import { freshApp } from "./harness.mjs";

@@ -5,10 +5,7 @@ function basename(path) {
 }
 
 function extOf(path) {
-  // Strip a query string or fragment before looking for the extension —
-  // without this, a link like "notes.md?v=2" extracts "md?v=2" as its
-  // extension, matches nothing in markdownExtensions/BLOCKED_OPEN_EXTENSIONS,
-  // and falls through to the wrong click-routing branch.
+  // Bug fix: "notes.md?v=2" used to extract "md?v=2", matching neither extension list.
   const name = basename(path).split(/[?#]/)[0];
   const dot = name.lastIndexOf(".");
   return dot === -1 ? "" : name.slice(dot + 1).toLowerCase();
@@ -18,12 +15,8 @@ function isExternal(href) {
   return href.includes("://") || href.startsWith("mailto:") || href.startsWith("tel:");
 }
 
-/// Where a position ends up after `text` (which may itself contain
-/// newlines — a multi-line selection stays multi-line when re-inserted)
-/// is typed starting at `start`. Threading every reselection through this
-/// — rather than adding `text.length` to `start.ch` directly — is what
-/// keeps the post-wrap/unwrap selection correct for a selection spanning
-/// more than one line, not just the common single-line case.
+// Where a position ends up after `text` is typed at `start` — handles multi-line
+// `text` correctly, unlike adding `text.length` to `start.ch` directly.
 function posAfterText(start, text) {
   const lines = text.split("\n");
   if (lines.length === 1) return { line: start.line, ch: start.ch + text.length };

@@ -1,8 +1,6 @@
 // The split-pane ratio preference and its drag-to-resize handle.
 
-// Split-pane ratio is a single preference shared by every tab, not
-// per-tab — a newly split tab starts at the last ratio you dragged to,
-// rather than jumping back to 50/50. See attachSplitterDrag.
+// One global preference, not per-tab — see CLAUDE.md.
 const SPLIT_RATIO_KEY = "mdreader.splitRatio";
 const SPLIT_RATIO_DEFAULT = 50;
 const SPLIT_MIN_PANE_PX = 160;
@@ -10,29 +8,20 @@ const SPLIT_MIN_PANE_PX = 160;
 function splitRatio() {
   const stored = Number(localStorage.getItem(SPLIT_RATIO_KEY));
   if (!Number.isFinite(stored) || stored <= 0) return SPLIT_RATIO_DEFAULT;
-  // Sanity clamp on a value read straight from localStorage (hand-edited
-  // or corrupted) before any real layout exists to pixel-clamp it —
-  // attachSplitterDrag's applyFromX is the actual SPLIT_MIN_PANE_PX-based
-  // clamp once a drag or the pane's real width is available.
+  // Sanity clamp for hand-edited/corrupted localStorage — applyFromX pixel-clamps for real.
   return Math.min(Math.max(stored, 10), 90);
 }
 
-/// Drag-to-resize for the editor/preview divider. Pointer events (not
-/// mouse events): setPointerCapture routes every subsequent move/up
-/// straight to the splitter itself, so there's no document-level
-/// listener to add/remove and no "button released outside the window"
-/// state to clean up, and one code path covers mouse, trackpad, touch,
-/// and pen.
+// Pointer events, not mouse events: setPointerCapture routes every move/up straight to
+// the splitter, so there's no document-level listener and one path covers all input types.
 function attachSplitterDrag(tab, splitter) {
   let rafId = 0;
 
   const applyFromX = (clientX) => {
     const rect = tab.paneEl.getBoundingClientRect();
     if (rect.width <= 0) return;
-    // Clamp in pixels, not percent: a percentage floor would still let
-    // both sides collapse to an uselessly narrow column on a small
-    // window, and the editor toolbar (14 buttons, .editor-toolbar's
-    // overflow-x) needs a real minimum to stay usable.
+    // Pixels, not percent — a percentage floor would still let both sides collapse
+    // uselessly narrow on a small window.
     const min = SPLIT_MIN_PANE_PX;
     const max = rect.width - SPLIT_MIN_PANE_PX;
     if (max <= min) return;
@@ -40,9 +29,7 @@ function attachSplitterDrag(tab, splitter) {
     setSplitRatio((x / rect.width) * 100);
   };
 
-  // Applies `pct` to every split tab, not just this one — the ratio is a
-  // shared preference (see splitRatio's comment), so a tab that's already
-  // in split mode elsewhere must not keep showing the old value.
+  // Applies to every split tab, not just this one — the ratio is a shared preference.
   const setSplitRatio = (pct) => {
     for (const t of state.tabs) {
       if (t.mode === "split") t.paneEl.style.setProperty("--split-ratio", `${pct}%`);
@@ -64,10 +51,8 @@ function attachSplitterDrag(tab, splitter) {
 
   splitter.addEventListener("pointermove", (e) => {
     if (!splitter.hasPointerCapture(e.pointerId)) return;
-    // Coalesce to one layout write per frame. CodeMirror re-measures on
-    // every refresh(), and lineWrapping means it has to re-wrap each
-    // visible line — an unthrottled refresh per pointermove is the one
-    // way this drag could feel heavy on a large document.
+    // Coalesce to one layout write per frame — an unthrottled refresh() per
+    // pointermove is the one way this drag could feel heavy on a large document.
     if (rafId) return;
     rafId = requestAnimationFrame(() => {
       rafId = 0;

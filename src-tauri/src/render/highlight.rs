@@ -28,8 +28,6 @@ pub(super) fn highlight_code_block(code: &str, lang: &str) -> String {
         let _ = escape_into(&mut escaped, lang);
         format!(" data-lang=\"{escaped}\"")
     };
-    // `code` (not `code-block`) is the class name build.rs's generated
-    // theme CSS targets for foreground/background colors — see
-    // `syntect::html::css_for_theme_with_class_style`.
+    // "code", not "code-block": build.rs's generated theme CSS targets this exact class.
     format!("<pre class=\"code-block code\"{lang_class}><code>{body}</code></pre>\n")
 }

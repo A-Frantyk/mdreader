@@ -21,10 +21,8 @@ function updateToc(tab) {
     linkById.set(h.id, a);
   });
 
-  // One observer, re-pointed at the active tab's headings on every
-  // switch, rather than a fresh one per render — tabs' content elements
-  // persist for the app's lifetime, so a per-render observer would never
-  // get disconnected and would accumulate one per switch.
+  // One observer, re-pointed on every switch — tabs' content persists for the app's
+  // lifetime, so a per-render observer would never disconnect and would accumulate.
   tocObserver = new IntersectionObserver(
     (entries) => {
       entries.forEach((entry) => {
@@ -35,9 +33,7 @@ function updateToc(tab) {
         }
       });
     },
-    // Root is this tab's own scroll container, not the shared
-    // #content-wrap — each tab scrolls independently now that a split
-    // pane can exist (see the .preview-scroll comment in styles.css).
+    // Root is this tab's own scroll container, not the shared #content-wrap.
     { root: tab.previewEl, rootMargin: "0px 0px -70% 0px", threshold: 0 }
   );
   tab.headings.forEach((h) => {

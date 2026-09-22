@@ -26,6 +26,15 @@ shasum -a 256 -c SHA256SUMS-macos.txt   # or -linux.txt
 Get-FileHash .\mdreader_*_x64-setup.exe -Algorithm SHA256
 ```
 
+Every release asset also carries a
+[GitHub build provenance attestation](https://docs.github.com/en/actions/security-guides/using-artifact-attestations-to-establish-provenance-for-builds)
+proving it was built by this repo's own `build.yml` from a specific commit,
+not hand-uploaded. Verify with the [`gh` CLI](https://cli.github.com/):
+
+```bash
+gh attestation verify mdreader_*_x64-setup.exe --repo A-Frantyk/mdreader
+```
+
 This is a hobby project with no code-signing budget, so both OSes will
 warn on first run — the source and CI build logs are public/inspectable,
 but neither install is backed by a paid trust certificate:
@@ -54,7 +63,31 @@ but neither install is backed by a paid trust certificate:
   `xattr -dr com.apple.quarantine /Applications/mdreader.app`.
 - **Windows** — SmartScreen shows "Windows protected your PC" because the
   installer isn't signed by a paid CA certificate. Click **More info** →
-  **Run anyway**.
+  **Run anyway**. A free [SignPath Foundation](https://signpath.org/) cert
+  for this project is pending approval (see "Code signing policy" below);
+  once active, tagged releases' `.exe`/`.msi` are Authenticode-signed and
+  this warning goes away.
+
+## Code signing policy
+
+Windows installers are (once SignPath Foundation approves this project;
+tracked in this repo's issues) code-signed for free by the
+[SignPath Foundation](https://signpath.org/) open-source program, using
+[SignPath.io](https://about.signpath.io/) infrastructure — thank you to both
+for supporting OSS.
+
+- **Committers** (can propose changes): Andrii Frantyk, and anyone whose PR a
+  committer merges.
+- **Reviewers** (approve PRs before merge): Andrii Frantyk.
+- **Approvers** (release code-signing requests): Andrii Frantyk.
+- **Privacy**: mdreader makes no network requests of its own — no telemetry,
+  no update check, no analytics. The only outbound traffic is the OS
+  webview fetching a remote image a *document itself* references (an
+  `![]()` pointing at an `https://`/`http://` URL), same as any other app
+  rendering user-supplied Markdown.
+
+macOS and Linux builds aren't covered by this policy — see "Download &
+install" above for their current signing status.
 
 ## Why it's fast
 

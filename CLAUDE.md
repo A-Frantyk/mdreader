@@ -299,9 +299,17 @@ instead of launching your new one.
   webview's JIT without a matching entitlements file. If a Developer cert
   is bought: notarize, flip `hardenedRuntime` to `true`, add an
   entitlements plist with `com.apple.security.cs.allow-jit`. Windows
-  SmartScreen still warns — no signing pipeline exists yet. Releases are
-  tag-driven (`v*`) via `build.yml`'s `release` job; every installer ships
-  a `SHA256SUMS-*.txt`.
+  `.exe`/`.msi` are Authenticode-signed on tag builds via the free
+  [SignPath Foundation](https://signpath.org/) OSS program (README's "Code
+  signing policy"), gated in `build.yml` on the `SIGNPATH_ORGANIZATION_ID`
+  repo variable being set — unset until SignPath approves the project, so
+  the workflow stays green either way. Signs only the outer installer, not
+  the bundled `mdreader.exe`: SmartScreen's reputation check runs on the
+  Mark-of-the-Web'd file the user downloads. Linux ships unsigned — no OS
+  gate blocks `.deb`/`.rpm` installs, so there's nothing to sign against.
+  Releases are tag-driven (`v*`) via `build.yml`'s `release` job; every
+  installer ships a `SHA256SUMS-*.txt` and a GitHub build provenance
+  attestation.
 - No auto-update mechanism.
 - Sanitizer/DoS headroom: `unique_id` (`render/headings.rs`) is quadratic on
   N duplicate headings, and syntect's `fancy-regex` grammars have no

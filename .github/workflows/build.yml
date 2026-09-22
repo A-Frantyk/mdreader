@@ -214,7 +214,7 @@ jobs:
       # Prepended to the auto-generated changelog, not replaced — kept here (not just
       # README.md) since the person hitting the Gatekeeper prompt is on this page.
       - name: Publish release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           files: release/*
           generate_release_notes: true

@@ -28,13 +28,19 @@
 
         <main class="content-wrap" id="content-wrap">
           <div id="empty-state" class="empty-state">
-            <p>No document open.</p>
-            <div class="empty-actions">
-              <button id="open-file-btn-main" class="open-btn">Open File…</button>
-              <button id="new-btn-main" class="open-btn secondary">Create</button>
+            <div class="empty-state-main">
+              <p>No document open.</p>
+              <div class="empty-actions">
+                <button id="open-file-btn-main" class="open-btn">Open File…</button>
+                <button id="new-btn-main" class="open-btn secondary">Create</button>
+              </div>
+              <p class="hint drop-hint">or drop a Markdown file here, or open one from your file manager.</p>
+              <section class="recent-files" data-recent-files hidden aria-labelledby="recent-files-title">
+                <h2 id="recent-files-title">Recent documents</h2>
+                <ul class="recent-files-list"></ul>
+              </section>
             </div>
-            <p class="hint">or drop a Markdown file here, or open one from your file manager.</p>
-            <p class="hint">
+            <p class="hint support-hint">
               Support this project via
               <a href="https://www.paypal.com/donate/?business=ifrantya%40gmail.com">PayPal</a>
               or <a href="https://send.monobank.ua/jar/9jmpz3bVHs">monobank jar</a>.
@@ -57,13 +63,19 @@
            a cloned <template> can't reuse ids. Keep in sync with #empty-state by hand. -->
       <template id="welcome-pane-template">
         <div class="empty-state">
-          <p>No document open.</p>
-          <div class="empty-actions">
-            <button type="button" class="open-btn" data-action="open-file">Open File…</button>
-            <button type="button" class="open-btn secondary" data-action="create">Create</button>
+          <div class="empty-state-main">
+            <p>No document open.</p>
+            <div class="empty-actions">
+              <button type="button" class="open-btn" data-action="open-file">Open File…</button>
+              <button type="button" class="open-btn secondary" data-action="create">Create</button>
+            </div>
+            <p class="hint drop-hint">or drop a Markdown file here, or open one from your file manager.</p>
+            <section class="recent-files" data-recent-files hidden aria-label="Recent documents">
+              <h2>Recent documents</h2>
+              <ul class="recent-files-list"></ul>
+            </section>
           </div>
-          <p class="hint">or drop a Markdown file here, or open one from your file manager.</p>
-          <p class="hint">
+          <p class="hint support-hint">
             Support this project via
             <a href="https://www.paypal.com/donate/?business=ifrantya%40gmail.com">PayPal</a>
             or <a href="https://send.monobank.ua/jar/9jmpz3bVHs">monobank jar</a>.
@@ -107,6 +119,7 @@
     <script src="js/helpers.js"></script>
     <script src="js/dom.js"></script>
     <script src="js/state.js"></script>
+    <script src="js/recent-files.js"></script>
     <script src="js/theme.js"></script>
     <script src="js/zoom.js"></script>
     <script src="js/loaders.js"></script>

@@ -176,6 +176,7 @@ async function init() {
   // Unconditional even at the default factor — the webview keeps its zoom across a dev reload.
   await applyZoom();
   wireStaticUI();
+  refreshRecentFiles();
 
   els.openFileBtnMain.addEventListener("click", openFileDialog);
   els.themeBtn.addEventListener("click", cycleTheme);

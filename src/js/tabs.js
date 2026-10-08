@@ -15,7 +15,9 @@ async function loadTab(path) {
     tab.hasMath = res.doc.has_math;
     contentEl.innerHTML = res.doc.html;
     rewriteImageSources(contentEl);
+    recordRecentFile(res.path);
   } catch (err) {
+    removeRecentFile(path);
     const div = document.createElement("div");
     div.className = "render-error";
     div.textContent = `Couldn't open ${path}:\n${err}`;
@@ -62,6 +64,7 @@ async function newDocument() {
 function buildWelcomePane(tab) {
   tab.contentEl.classList.add("welcome");
   tab.contentEl.replaceChildren(els.welcomeTemplate.content.cloneNode(true));
+  renderRecentFiles(tab.contentEl.querySelector("[data-recent-files]"));
   tab.contentEl
     .querySelector('[data-action="open-file"]')
     .addEventListener("click", openFileDialog);
@@ -107,6 +110,7 @@ async function openPaths(paths) {
   for (const path of paths) {
     const existing = state.tabs.findIndex((t) => t.path === path);
     if (existing !== -1) {
+      recordRecentFile(state.tabs[existing].path);
       lastTouched = existing;
       continue;
     }

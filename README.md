@@ -9,6 +9,7 @@ in mdreader — no editor, no project to load, just the rendered document.
 - Syntax-highlighted code fences
 - Mermaid diagrams and KaTeX math, loaded only for documents that use them
 - Tabs, a table-of-contents sidebar, and in-page find (⌘/Ctrl-F)
+- Five recently opened documents on the home screen, persisted across restarts
 - Light / Dark theme
 - Registers as a `.md`/`.markdown`/`.mdown`/`.mkd` handler on all three OSes
 

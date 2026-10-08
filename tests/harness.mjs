@@ -47,7 +47,7 @@ window.__testExports = {
   set markdownExtensions(v) { markdownExtensions = v; },
   THEME_KEY, THEME_ICON, SPLIT_RATIO_KEY, SPLIT_RATIO_DEFAULT, SPLIT_MIN_PANE_PX, PREVIEW_DEBOUNCE_MS,
   BLOCKED_OPEN_EXTENSIONS, LIST_PREFIX_RE, EDITOR_SHORTCUTS, TOOLBAR_GROUPS, MARKDOWN_TOKEN_TYPES,
-  ZOOM_KEY, ZOOM_DEFAULT, ZOOM_STEPS,
+  ZOOM_KEY, ZOOM_DEFAULT, ZOOM_STEPS, RECENT_FILES_KEY, RECENT_FILES_LIMIT,
   get modalOpen() { return modalOpen; },
   set modalOpen(v) { modalOpen = v; },
   get aboutOpen() { return aboutOpen; },

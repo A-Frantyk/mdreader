@@ -12,7 +12,7 @@ in mdreader — no editor, no project to load, just the rendered document.
 - An Outline that highlights the current section and keeps it in view as you
   scroll, in reading mode and the edit mode's live preview
 - Five recently opened documents on the home screen, persisted across restarts
-- Light / Dark theme
+- Light / Dark UI and syntax colors from the vendored One Light / One Dark Pro themes
 - Registers as a `.md`/`.markdown`/`.mdown`/`.mkd` handler on all three OSes
 
 ## Download & install
@@ -183,6 +183,16 @@ re-rendering a shared node on every switch — so switching tabs is free and
 Mermaid/KaTeX only ever render once per document, the first time its tab
 is actually shown (both need real layout to measure text, so they can't
 run against a `display: none` element).
+
+### Application colors
+
+The existing Light/Dark toggle switches both UI and syntax colors. At build
+time, the vendored VS Code themes supply the document, tabs, Outline, editor
+toolbar, controls, and dialogs. Missing UI roles use related theme colors;
+UI text and focus colors receive targeted contrast adjustments for readability.
+Native OS menus/dialogs retain their system appearance, and Mermaid retains
+its own light/dark diagram palette. Theme licenses are in
+[`src-tauri/themes/LICENSE-THEMES.md`](src-tauri/themes/LICENSE-THEMES.md).
 
 ## Security model
 

@@ -123,6 +123,28 @@ fn syntax_custom_properties_defined_in_both_themes() {
     assert!(checked > 0, "expected styles.css to reference at least one --syntax-* property");
 }
 
+#[test]
+fn ui_custom_properties_are_generated_and_not_overridden() {
+    let styles = repo_file("src/styles.css");
+    let themes = [repo_file("src/code-theme-light.css"), repo_file("src/code-theme-dark.css")];
+    let mut checked = 0;
+    for part in styles.split("var(--ui-").skip(1) {
+        let name = part.split(|c: char| c == ')' || c == ',').next().unwrap();
+        let declaration = format!("--ui-{name}:");
+        assert!(!styles.contains(&declaration), "styles.css overrides {declaration}");
+        for theme in &themes {
+            let value = theme.split(&declaration).nth(1)
+                .unwrap_or_else(|| panic!("generated theme is missing {declaration}"))
+                .split(';').next().unwrap().trim();
+            assert!(value.starts_with('#'), "{declaration} is not a color: {value}");
+            assert!(matches!(value.len(), 7 | 9), "invalid UI hex color {value}");
+            assert!(value[1..].chars().all(|c| c.is_ascii_hexdigit()));
+        }
+        checked += 1;
+    }
+    assert!(checked >= 25, "expected the app to consume the generated UI palette");
+}
+
 /// A broken JSON->Theme conversion could silently drop almost every scope without the
 /// build failing. Both vendored themes define 200+ tokenColors entries.
 #[test]

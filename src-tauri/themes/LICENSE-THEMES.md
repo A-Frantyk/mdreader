@@ -2,8 +2,10 @@
 
 Two VS Code theme JSON files in this directory are vendored verbatim as input to
 `build.rs`'s `generate_code_theme_css`/`generate_codemirror_theme_css` (converted to
-syntect `Theme`s at build time, never shipped as-is). Neither theme's name is surfaced
-in the app UI — they back the existing Light/Dark toggle.
+syntect `Theme`s and application UI color variables at build time, never shipped
+as-is). Neither theme's name is surfaced in the app UI — they back the existing
+Light/Dark toggle. UI colors use explicit related-role fallbacks and targeted
+text/focus contrast adjustments; the vendored JSON and license notices are unchanged.
 
 ## one-dark-pro.json — One Dark Pro
 

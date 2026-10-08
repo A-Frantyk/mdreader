@@ -18,7 +18,7 @@ planned; `#[cfg_attr(mobile, ...)]` in `lib.rs`/`main.rs` is inert
 | `src-tauri/src/commands.rs` | The 10 Tauri commands (`open_markdown_file`, `drain_pending_files`, `markdown_extensions`, `read_markdown_source`, `render_markdown`, `save_markdown_file`, `save_markdown_file_as`, `mark_frontend_ready`, `quit_app`, `set_zoom`). `render_and_grant` is the shared render+scope-grant tail used by both the file-open path and the live-preview path. |
 | `src-tauri/src/files.rs` | Markdown-path validation (`is_markdown_path`/`require_markdown_path`/`normalize_markdown_path`) and the app's one filesystem write, `atomic_write`. |
 | `src-tauri/src/menu.rs` | The native File/Edit/View/Window/Help menu bar and its click handler. Hand-built rather than `tauri::menu::Menu::default()` — see the two menu invariants below for why. |
-| `src-tauri/build.rs` | Converts the two vendored VS Code theme JSON files (`themes/`) into syntect `Theme`s and generates four CSS files at compile time: `src/code-theme-{light,dark}.css` (read-only preview's fence colors, plus a `:root { --syntax-* }` palette the editor pane and preview fences both consume) and `src/codemirror-theme-{light,dark}.css` (editor fence-token colors, via `Highlighter::style_for_stack` — see the theme-sourcing and two-theme-layer invariants below). Re-run `cargo build` after touching this — the generated files are gitignored-adjacent build output, not hand-edited. |
+| `src-tauri/build.rs` | Loads each vendored VS Code theme JSON (`themes/`) once and generates four CSS files at compile time: `src/code-theme-{light,dark}.css` (preview fences, `--syntax-*` editor/preview palette, and `--ui-*` application palette) and `src/codemirror-theme-{light,dark}.css` (editor fence-token colors via `Highlighter::style_for_stack` — see the theme-sourcing and two-theme-layer invariants below). Re-run `cargo build` after touching this — generated files are build output, not hand-edited. |
 | `src-tauri/themes/` | The two vendored VS Code theme JSON files (One Dark Pro / One Light) `build.rs` converts at compile time, plus `LICENSE-THEMES.md` (both MIT). Vendored verbatim, same as `src/vendor/` — don't hand-edit; if either theme is ever swapped, replace the JSON and re-run `cargo build`. |
 | `src-tauri/tauri.conf.json` | `bundle.fileAssociations` is the **single source of truth** for which extensions this app handles — it drives the OS-level file association and, via `build.rs`'s `generate_markdown_extensions`, the compiled-in `MARKDOWN_EXTENSIONS` used for argv/drop filtering and the `markdown_extensions` command. This has to happen at *build* time: `tauri_utils::config`'s codegen for embedding config into the binary unconditionally hardcodes `file_associations` to `None`, so `Context::config()` can never see it at runtime, on any platform — confirmed by reading `tauri_utils`' source after this exact assumption silently broke file-opening everywhere. Don't hardcode the extension list anywhere else. |
 | `src-tauri/icons/app-icon.svg` | The app icon's only hand-authored source (monoline "MD" monogram, pupil dot in the D's counter — on `--accent`, `src/styles.css`). Every other file in `src-tauri/icons/` is generated from it via `npm run icon`; don't hand-edit those. Letterforms are stroked `<path>`s, not `<text>` — `tauri icon` rasterizes with resvg and must not depend on system font resolution. The generator also writes `ios/`/`android/` subfolders and a `64x64.png`; delete the `ios`/`android` dirs after regenerating (this project is desktop-only, see below) — `64x64.png` is harmless unreferenced output, same as the `Square*Logo.png`/`StoreLogo.png` Windows Store assets `tauri.conf.json`'s `bundle.icon` doesn't list. |
@@ -123,8 +123,11 @@ scope" for an unrelated change. There is no grandfathering.
   .cm-meta` (not `.cm-s-mdreader .cm-meta`): `codemirror-theme-*.css` loads
   lazily, *after* `styles.css`, so on equal specificity it would win every
   tie without the bump.
+  The selection rule likewise needs
+  `.cm-s-mdreader.CodeMirror .CodeMirror-selected` to outrank the lazily
+  loaded CodeMirror base CSS's `.CodeMirror-focused .CodeMirror-selected`.
 
-- **Both syntax themes come from two vendored VS Code theme JSON files, not
+- **UI and syntax themes come from two vendored VS Code theme JSON files, not
   syntect's bundled `ThemeSet::load_defaults()` — their names are never
   surfaced in the UI.** `themes/one-dark-pro.json`/`one-light.json` (MIT,
   see `LICENSE-THEMES.md`). `build.rs`'s `load_vscode_theme` converts one
@@ -143,6 +146,20 @@ scope" for an unrelated change. There is no grandfathering.
   `contracts.rs`'s `syntax_custom_properties_defined_in_both_themes` and
   `generated_code_theme_css_has_substantial_rule_count` guard a typo'd
   property name and a broken conversion respectively.
+  `ui_root_css` emits `--ui-*` into the same eagerly linked files; `styles.css`
+  may alias or consume those names, never redefine them. Its UI palette must
+  not duplicate vendored hex colors. UI roles read the JSON `colors` map with
+  explicit related-key fallbacks; invalid provided colors or exhausted fallback
+  chains fail the build with source/key context. Required surfaces retain source
+  colors. UI foregrounds are adjusted only when needed to reach 4.5:1 contrast,
+  and focus uses the readable accent (at least 3:1 against adjacent surfaces).
+  Adjustments blend toward black/white in 1% steps, checking composited alpha
+  backgrounds; syntax colors are unaffected. Grid/drop tints derive from theme
+  foreground/accent; shadow/backdrop remain neutral black with fixed alpha.
+  `tests/theme-palette.test.mjs` verifies source mappings and actual UI contrast
+  pairs; `tests/theme.test.mjs` covers eager/lazy theme switching. Native OS
+  chrome/dialogs and Mermaid's internal diagram palettes remain outside this
+  palette; CSS `color-scheme` covers webview-native controls.
 
 - **The write path is one narrow, validated command — not `tauri-plugin-fs`.**
   `save_markdown_file` is the app's only filesystem write: a small custom

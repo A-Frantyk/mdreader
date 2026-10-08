@@ -224,7 +224,7 @@ async function activateTab(index) {
   updateSaveButton();
 
   if (!tab) {
-    tocObserver?.disconnect();
+    disconnectToc();
     els.toc.innerHTML = "";
     els.sidebar.classList.add("hidden");
     return;

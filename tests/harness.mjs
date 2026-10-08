@@ -157,6 +157,14 @@ export function freshApp() {
     disconnect() {}
   };
 
+  window.ResizeObserver = class {
+    constructor(callback) {
+      this.callback = callback;
+    }
+    observe() {}
+    disconnect() {}
+  };
+
   window.requestAnimationFrame = (cb) => setTimeout(() => cb(Date.now()), 0);
   window.cancelAnimationFrame = (id) => clearTimeout(id);
 

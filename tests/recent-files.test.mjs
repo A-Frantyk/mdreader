@@ -115,9 +115,15 @@ test("recent file rendering", async (t) => {
     ];
     for (const root of roots) {
       const main = root.querySelector(".empty-state-main");
+      const actions = main.querySelector(".empty-actions");
       const dropHint = main.querySelector(".drop-hint");
       const recents = main.querySelector("[data-recent-files]");
       const support = root.querySelector(".support-hint");
+      assert.equal(actions.parentElement, main);
+      assert.equal(recents.parentElement, main);
+      assert.ok(recents.classList.contains("recent-files"));
+      assert.equal(actions.children.length, 2);
+      assert.equal(actions.querySelectorAll(":scope > button.open-btn").length, 2);
       assert.ok(
         dropHint.compareDocumentPosition(recents) & window.Node.DOCUMENT_POSITION_FOLLOWING
       );

@@ -168,6 +168,12 @@ async function closeTab(index) {
   activateTab(Math.min(index, state.tabs.length - 1));
 }
 
+function cycleTab(step) {
+  const n = state.tabs.length;
+  if (n < 2) return;
+  activateTab((state.activeIndex + step + n) % n);
+}
+
 function renderTabBar() {
   els.tabbar.innerHTML = "";
   state.tabs.forEach((tab, i) => {

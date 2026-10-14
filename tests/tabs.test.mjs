@@ -273,3 +273,69 @@ test("handleMenuAction", async (t) => {
     assert.equal(called, false);
   });
 });
+
+test("Ctrl+Tab cycling", async (t) => {
+  function pressTab(window, props) {
+    const event = new window.KeyboardEvent("keydown", {
+      key: "Tab",
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+      ...props,
+    });
+    window.document.dispatchEvent(event);
+    return event;
+  }
+
+  function wiredApp(count, activeIndex = 0) {
+    const { window, app } = freshApp();
+    window.wireStaticUI();
+    for (let i = 0; i < count; i++) app.state.tabs.push(window.createTabShell({}));
+    app.state.activeIndex = activeIndex;
+    return { window, app };
+  }
+
+  await t.test("Ctrl+Tab advances and wraps from the last tab to the first", () => {
+    const { window, app } = wiredApp(3);
+    pressTab(window);
+    assert.equal(app.state.activeIndex, 1);
+    pressTab(window);
+    pressTab(window);
+    assert.equal(app.state.activeIndex, 0);
+  });
+
+  await t.test("Ctrl+Shift+Tab goes back and wraps from the first tab to the last", () => {
+    const { window, app } = wiredApp(3);
+    pressTab(window, { shiftKey: true });
+    assert.equal(app.state.activeIndex, 2);
+    pressTab(window, { shiftKey: true });
+    assert.equal(app.state.activeIndex, 1);
+  });
+
+  await t.test("with a single tab the index stays put but the keystroke is still consumed", () => {
+    const { window, app } = wiredApp(1);
+    const event = pressTab(window);
+    assert.equal(app.state.activeIndex, 0);
+    assert.equal(event.defaultPrevented, true);
+  });
+
+  await t.test("with no tabs it does nothing", () => {
+    const { window, app } = wiredApp(0, -1);
+    pressTab(window);
+    assert.equal(app.state.activeIndex, -1);
+  });
+
+  await t.test("is inert while the unsaved-changes modal is open", () => {
+    const { window, app } = wiredApp(2);
+    app.modalOpen = true;
+    pressTab(window);
+    assert.equal(app.state.activeIndex, 0);
+  });
+
+  await t.test("is inert while the About dialog is open", () => {
+    const { window, app } = wiredApp(2);
+    app.aboutOpen = true;
+    pressTab(window);
+    assert.equal(app.state.activeIndex, 0);
+  });
+});

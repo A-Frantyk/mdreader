@@ -75,7 +75,10 @@ function wireStaticUI() {
     }
 
     const mod = e.metaKey || e.ctrlKey;
-    if (mod && e.key.toLowerCase() === "f") {
+    if (e.ctrlKey && e.key === "Tab") {
+      e.preventDefault();
+      cycleTab(e.shiftKey ? -1 : 1);
+    } else if (mod && e.key.toLowerCase() === "f") {
       e.preventDefault();
       openFind();
     } else if (mod && e.key.toLowerCase() === "w" && state.activeIndex !== -1) {

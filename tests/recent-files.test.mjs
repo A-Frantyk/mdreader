@@ -103,7 +103,7 @@ test("recent file rendering", async (t) => {
     );
   });
 
-  await t.test("keeps guidance before recents and support as the final page element", () => {
+  await t.test("keeps guidance before recents as the final page element", () => {
     const { window, app } = freshApp();
     const tab = window.createTabShell({ kind: "welcome", title: "New Tab" });
     app.state.tabs.push(tab);
@@ -118,7 +118,6 @@ test("recent file rendering", async (t) => {
       const actions = main.querySelector(".empty-actions");
       const dropHint = main.querySelector(".drop-hint");
       const recents = main.querySelector("[data-recent-files]");
-      const support = root.querySelector(".support-hint");
       assert.equal(actions.parentElement, main);
       assert.equal(recents.parentElement, main);
       assert.ok(recents.classList.contains("recent-files"));
@@ -127,7 +126,7 @@ test("recent file rendering", async (t) => {
       assert.ok(
         dropHint.compareDocumentPosition(recents) & window.Node.DOCUMENT_POSITION_FOLLOWING
       );
-      assert.equal(root.lastElementChild, support);
+      assert.equal(root.lastElementChild, main);
     }
   });
 });

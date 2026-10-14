@@ -367,11 +367,6 @@ body.is-splitting {
   gap: 4px;
 }
 
-.support-hint {
-  flex: 0 0 auto;
-  margin: 20px 0 0;
-}
-
 .empty-actions,
 .recent-files {
   width: min(560px, 100%);
@@ -786,7 +781,3 @@ body.is-splitting {
 .modal a { color: var(--accent); }
 
 .modal .hint { font-size: 13px; color: var(--text-muted); }
-
-/* #empty-state is a sibling of .content inside #content-wrap, not inside
-   it, so its new support link would otherwise render default-blue. */
-.empty-state a { color: var(--accent); }
